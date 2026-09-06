@@ -6,6 +6,16 @@ Antes de qualquer implementação, leia `.spec/constituicao.md` e a spec
 da feature em que você vai implementar. Quando a tarefa envolver uma spec e o caminho
 não estiver explícito no pedido, PARE e pergunte.
 
+## Perguntas ao usuário
+
+Sempre que precisar perguntar algo ao usuário:
+
+- Use a interface interativa nativa do Claude Code.
+- Uma pergunta de cada vez.
+- Apresente as opções com uma breve explicação.
+- Indique claramente a opção recomendada, preferencialmente como primeira opção.
+- Não tome decisões que dependam do usuário sem perguntar.
+
 ## Proibições
 - Não preencher lacuna de requisito com palpite silencioso. Se faltar informação, PARE e pergunte.
 - Não escrever critério de aceite não observável.
