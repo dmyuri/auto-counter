@@ -168,6 +168,7 @@ class ManifestDaSessao:
         minutos_perdidos: tuple[MinutoPerdido, ...] = (),
         duracao_real: int | None = None,
         encerrada_pelo_usuario: bool = False,
+        manter_videos: bool = False,
         status: StatusDaSessao | None = None,
     ) -> None:
         self.dir_sessao = Path(dir_sessao)
@@ -176,6 +177,7 @@ class ManifestDaSessao:
         self.duracao_pedida = duracao_pedida
         self.duracao_real = duracao_real
         self.encerrada_pelo_usuario = encerrada_pelo_usuario
+        self.manter_videos = manter_videos
         self.status = status
         self._capturados: list[MinutoCapturado] = list(minutos_capturados)
         self._perdidos: list[MinutoPerdido] = list(minutos_perdidos)
@@ -188,18 +190,25 @@ class ManifestDaSessao:
         id_sessao: str,
         id_camera: str,
         duracao_pedida: int,
+        manter_videos: bool = False,
     ) -> "ManifestDaSessao":
         """Cria o diretório da sessão e grava o cabeçalho já de saída.
 
         O cabeçalho vai para o disco antes do primeiro minuto porque uma sessão
         que morre no minuto 1 ainda precisa deixar rastro de que existiu — e
         porque é o diretório criado aqui que recebe os `.mp4` (SUP-012).
+
+        `manter_videos` é a decisão de preservação de AC-003.5, desligada por
+        padrão (SUP-012). Fica gravada aqui, e não só na linha de comando,
+        porque quem descarta os vídeos é o encerramento da sessão, depois do
+        processamento (T-09) — nessa hora o comando original já não existe.
         """
         manifest = cls(
             dir_sessao,
             id_sessao=id_sessao,
             id_camera=id_camera,
             duracao_pedida=duracao_pedida,
+            manter_videos=manter_videos,
         )
         manifest.dir_sessao.mkdir(parents=True, exist_ok=True)
         manifest.gravar()
@@ -334,6 +343,7 @@ class ManifestDaSessao:
             "duracao_pedida": self.duracao_pedida,
             "duracao_real": self.duracao_real,
             "encerrada_pelo_usuario": self.encerrada_pelo_usuario,
+            "manter_videos": self.manter_videos,
             "status": None if self.status is None else self.status.value,
             "inicio": _serializa_instante(self.inicio),
             "fim": _serializa_instante(self.fim),
@@ -420,5 +430,6 @@ def ler(dir_sessao: str | Path) -> ManifestDaSessao:
         ),
         duracao_real=dados["duracao_real"],
         encerrada_pelo_usuario=dados["encerrada_pelo_usuario"],
+        manter_videos=dados["manter_videos"],
         status=None if status is None else StatusDaSessao(status),
     )
