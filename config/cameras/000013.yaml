@@ -1,10 +1,12 @@
 # Camera 000013 - camera do MVP, a unica calibrada nesta entrega.
 #
-# VALORES PROVISORIOS (T-05): os pontos da linha e os rotulos de sentido ainda
-# nao foram conferidos contra o video. Quem fixa os valores definitivos e a
-# calibracao de T-10, olhando o PNG de preview (AC-002.1) para decidir onde a
-# linha deve cair e qual rotulo fica de cada lado (SUP-003).
-# Remover este bloco de comentario quando T-10 fechar.
+# Calibrada em T-10 contra o PNG de preview (AC-002.1): a linha cai sobre a
+# faixa de retencao, de bordo a bordo do asfalto, e cobre as duas maos.
+# A normal de p1 -> p2 aponta para cima no quadro (SUP-003), entao sentido_a
+# rotula quem se afasta da camera (mao a esquerda da faixa amarela dupla) e
+# sentido_b quem se aproxima (mao a direita). Conferido no PNG: quem se afasta
+# vai para Icarai e quem se aproxima vai para o Centro.
+# Trocar p1 por p2 inverte os dois sentidos: a ordem dos pontos importa.
 #
 # O id fica entre aspas para preservar os zeros a esquerda (SUP-001): sem
 # aspas o YAML leria 000013 como numero.
@@ -13,8 +15,8 @@
 # Coordenadas em pixels absolutos do frame original 1280x720 (SUP-002).
 id: "000013"
 nome: "Praça Getúlio Vargas"
-sentido_a: "sentido A"
-sentido_b: "sentido B"
+sentido_a: "Icaraí"
+sentido_b: "Centro"
 linha:
-  p1: {x: 120, y: 470}
-  p2: {x: 1160, y: 470}
+  p1: {x: 900, y: 223}
+  p2: {x: 476, y: 258}
