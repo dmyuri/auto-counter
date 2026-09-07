@@ -1,0 +1,20 @@
+# Camera 000013 - camera do MVP, a unica calibrada nesta entrega.
+#
+# VALORES PROVISORIOS (T-05): os pontos da linha e os rotulos de sentido ainda
+# nao foram conferidos contra o video. Quem fixa os valores definitivos e a
+# calibracao de T-10, olhando o PNG de preview (AC-002.1) para decidir onde a
+# linha deve cair e qual rotulo fica de cada lado (SUP-003).
+# Remover este bloco de comentario quando T-10 fechar.
+#
+# O id fica entre aspas para preservar os zeros a esquerda (SUP-001): sem
+# aspas o YAML leria 000013 como numero.
+# Nenhuma URL aqui: ela e derivada do id (AC-001.4) sobre a base URL que vem
+# de AUTO_COUNTER_BASE_URL.
+# Coordenadas em pixels absolutos do frame original 1280x720 (SUP-002).
+id: "000013"
+nome: "Praça Getúlio Vargas"
+sentido_a: "sentido A"
+sentido_b: "sentido B"
+linha:
+  p1: {x: 120, y: 470}
+  p2: {x: 1160, y: 470}
