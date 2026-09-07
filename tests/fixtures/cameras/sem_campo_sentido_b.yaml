@@ -1,0 +1,7 @@
+# Falta o campo obrigatorio sentido_b (AC-001.2).
+id: "000099"
+nome: "Camera sem o rotulo do sentido B"
+sentido_a: "sentido A"
+linha:
+  p1: {x: 300, y: 200}
+  p2: {x: 900, y: 260}

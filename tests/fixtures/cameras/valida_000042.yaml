@@ -1,0 +1,9 @@
+# Segunda camera valida, com linha propria e bem diferente da 000013:
+# e o que permite provar que nenhuma linha e reaproveitada entre cameras.
+id: "000042"
+nome: "Via de teste - camera 42"
+sentido_a: "subindo"
+sentido_b: "descendo"
+linha:
+  p1: {x: 10, y: 10}
+  p2: {x: 20, y: 700}

@@ -1,0 +1,9 @@
+# Camera valida de apoio aos testes do registro (T-03).
+# Nao e a calibracao real da 000013: essa mora em config/cameras/ (T-05/T-10).
+id: "000013"
+nome: "Via de teste - camera 13"
+sentido_a: "sentido A"
+sentido_b: "sentido B"
+linha:
+  p1: {x: 120, y: 400}
+  p2: {x: 1160, y: 420}

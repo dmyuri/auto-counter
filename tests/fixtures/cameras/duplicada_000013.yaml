@@ -1,0 +1,8 @@
+# Arquivo com nome diferente declarando o mesmo id da valida_000013 (AC-001.3).
+id: "000013"
+nome: "Outra camera declarando o id 000013"
+sentido_a: "sentido A"
+sentido_b: "sentido B"
+linha:
+  p1: {x: 500, y: 100}
+  p2: {x: 500, y: 600}
