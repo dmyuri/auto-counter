@@ -20,8 +20,10 @@ de AC-003.2 (D-2).
 
 O denominador do status é o N **pedido** (SUP-013). Quem substitui esse
 denominador pela duração real é o encerramento explícito pelo usuário
-(AC-003.6), tratado em T-08: `parada` já entra na assinatura como o gancho
-dele, e enquanto for `None` o laço segue até o minuto N.
+(AC-003.6): quando `parada` sinaliza, a sessão passa a valer a duração que
+realmente aconteceu, e é sobre ela que o status é calculado — desistência nunca
+cai na regra do denominador pedido. Enquanto `parada` for `None`, ou nunca
+sinalizar, o laço segue até o minuto N.
 
 Relógio, espera e cliente HTTP entram por parâmetro (D-7): uma sessão de 15
 minutos com janela de 90 s não teria como ser testada em tempo real.
@@ -49,7 +51,7 @@ from auto_counter.capture.manifest import (
 )
 from auto_counter.capture.probe import Checagem, checar, e_novo
 from auto_counter.capture.readable import descartar, e_legivel
-from auto_counter.capture.status import StatusDaSessao, classificar
+from auto_counter.capture.status import ResultadoDoStatus, StatusDaSessao, classificar
 
 INTERVALO_ENTRE_CHECAGENS = 10.0
 """Segundos entre duas checagens HEAD do mesmo minuto (SUP-008). Normativo."""
@@ -72,9 +74,13 @@ class Parada(Protocol):
     """O sinal de encerramento explícito pelo usuário (AC-003.6).
 
     Modelado como objeto vindo de fora, e não como morte do processo, porque
-    fechar a interface não interrompe nada (AC-012.4 de `interface-sessao`). O
-    consumo deste sinal é de T-08; aqui ele só é aceito e, quando `None`,
-    ignorado.
+    fechar a interface não interrompe nada (AC-012.4 de `interface-sessao`). É
+    o mesmo gancho que o Ctrl+C do CLI (T-10) e, depois, o botão da interface
+    (AC-012.4) acionam.
+
+    O sinal é consultado **entre checagens e entre minutos**: uma parada não
+    espera a janela de 90 s vencer para ter efeito, e um minuto abandonado no
+    meio da janela não vira minuto perdido.
     """
 
     def foi_pedida(self) -> bool: ...
@@ -116,6 +122,22 @@ class _MinutoPerdido:
     motivo: str
 
 
+@dataclass(frozen=True)
+class _ParadaPedida:
+    """O usuário encerrou a sessão no meio desta janela (AC-003.6).
+
+    Este minuto **não** é perdido: ele simplesmente não existe. Contá-lo como
+    perda é a diferença entre uma sessão `DEGRADADA` falsa e a `COMPLETA`
+    correta — pedir 15 e parar no 7 sem falha nenhuma não pode virar "8 minutos
+    perdidos".
+    """
+
+
+def _parada_pedida(parada: "Parada | None") -> bool:
+    """Consulta o sinal de encerramento; `None` significa "ninguém encerrou"."""
+    return parada is not None and parada.foi_pedida()
+
+
 def _janela_de_um_minuto(
     *,
     minuto: int,
@@ -126,7 +148,8 @@ def _janela_de_um_minuto(
     inicio_da_janela: datetime,
     agora: Callable[[], datetime],
     dormir: Callable[[float], None],
-) -> _ClipeAceito | _MinutoPerdido:
+    parada: "Parada | None",
+) -> _ClipeAceito | _MinutoPerdido | _ParadaPedida:
     """Roda a janela de 90 s de um minuto e devolve o desfecho dele.
 
     Checagem HEAD imediata e depois a cada 10 s (SUP-008), até a janela vencer:
@@ -138,6 +161,8 @@ def _janela_de_um_minuto(
       a legibilidade (AC-004.3);
     - clipe ilegível → descarta o arquivo e **continua checando dentro do que
       sobrou da janela**, porque o servidor pode publicar outro clipe;
+    - parada pedida entre duas checagens → a janela é abandonada e o minuto não
+      existe, nem como capturado nem como perdido (AC-003.6);
     - janela vencida → minuto perdido, com o motivo.
 
     Nenhuma exceção das camadas de baixo escapa: rede, HTTP, header ausente e
@@ -148,6 +173,9 @@ def _janela_de_um_minuto(
     motivo = MOTIVO_JANELA_ESGOTADA
 
     while agora() < prazo:
+        if _parada_pedida(parada):
+            return _ParadaPedida()
+
         checagem = checar(cliente, url, agora=agora)
 
         if e_novo(checagem, etags_ja_aceitos):
@@ -187,6 +215,39 @@ def _janela_de_um_minuto(
     return _MinutoPerdido(motivo=motivo)
 
 
+def _duracao_real(
+    manifest: ManifestDaSessao, *, duracao_pedida: int, encerrada: bool
+) -> int:
+    """Quantos minutos a sessão realmente teve.
+
+    Sem encerramento pelo usuário, a duração real é o N pedido: todo minuto de
+    1 a N foi resolvido, capturado ou perdido. Com encerramento no minuto k
+    (AC-003.6), é o número de minutos **já resolvidos** — o minuto em curso
+    quando a parada chegou não existe, e os minutos que nem começaram também
+    não. Contar pelo manifest, e não por `k - 1`, é o que mantém a duração real
+    igual ao que ficou registrado em disco.
+    """
+    if not encerrada:
+        return duracao_pedida
+    return len(manifest.minutos_capturados) + len(manifest.minutos_perdidos)
+
+
+def _classificar_a_sessao(base: int, minutos_perdidos: list[int]) -> ResultadoDoStatus:
+    """Classifica a sessão pelo denominador que o laço escolheu (SUP-013).
+
+    Uma sessão encerrada antes do primeiro minuto resolvido tem duração real 0,
+    e `classificar` rejeita `base < 1` como erro de programação — com razão: não
+    existe percentual sobre zero. Decisão do autor do projeto para este caso:
+    `INVALIDA`, sem passar por `classificar`, com a lista de perdidos vazia.
+    Coerente com o §Contexto da spec, onde o status responde se aquele número
+    pode ser comparado ao de outra sessão — sem nenhum minuto, não pode. Segue
+    sendo sessão, não exceção (AC-003.6), e não é um quarto status (Q-003).
+    """
+    if base < 1:
+        return ResultadoDoStatus(StatusDaSessao.INVALIDA, ())
+    return classificar(base, minutos_perdidos)
+
+
 def capturar(
     camera: Camera,
     minutos: int,
@@ -212,8 +273,13 @@ def capturar(
     capturado ou perdido; a do minuto 1 começa no instante do comando. Um minuto
     perdido não interrompe a sessão: a captura segue para o seguinte (AC-004.2).
 
-    `parada` é o gancho do encerramento explícito pelo usuário (AC-003.6),
-    consumido em T-08. Enquanto for `None`, o laço vai até o minuto N.
+    `parada` é o encerramento explícito pelo usuário (AC-003.6), consultado
+    entre minutos e entre checagens. Quando ele sinaliza no minuto k, a duração
+    real da sessão passa a ser o número de minutos já resolvidos, o status é
+    calculado sobre essa duração e não sobre o N pedido (SUP-013), o
+    encerramento fica registrado no manifest, e os minutos já capturados seguem
+    para processamento: o retorno é um resultado de sessão normal, com status
+    próprio, e não um erro. Enquanto `parada` for `None`, o laço vai até N.
     """
     duracao_pedida = validar_duracao(minutos)
     url = url_do_clipe(camera)
@@ -230,8 +296,13 @@ def capturar(
 
     etags_ja_aceitos: set[str] = set()
     inicio_da_janela = relogio_do_comando
+    encerrada_pelo_usuario = False
 
     for minuto in range(1, duracao_pedida + 1):
+        if _parada_pedida(parada):
+            encerrada_pelo_usuario = True
+            break
+
         desfecho = _janela_de_um_minuto(
             minuto=minuto,
             cliente=cliente,
@@ -241,7 +312,12 @@ def capturar(
             inicio_da_janela=inicio_da_janela,
             agora=agora,
             dormir=dormir,
+            parada=parada,
         )
+
+        if isinstance(desfecho, _ParadaPedida):
+            encerrada_pelo_usuario = True
+            break
 
         if isinstance(desfecho, _ClipeAceito):
             etags_ja_aceitos.add(desfecho.checagem.etag)
@@ -257,17 +333,23 @@ def capturar(
 
         inicio_da_janela = agora()
 
-    resultado = classificar(
-        duracao_pedida, [item.minuto for item in manifest.minutos_perdidos]
+    minutos_perdidos = [item.minuto for item in manifest.minutos_perdidos]
+    duracao_real = _duracao_real(
+        manifest, duracao_pedida=duracao_pedida, encerrada=encerrada_pelo_usuario
     )
-    manifest.fechar(resultado, duracao_real=duracao_pedida)
+    resultado = _classificar_a_sessao(duracao_real, minutos_perdidos)
+    manifest.fechar(
+        resultado,
+        duracao_real=duracao_real,
+        encerrada_pelo_usuario=encerrada_pelo_usuario,
+    )
 
     return ResultadoDaSessao(
         id_sessao=id_sessao,
         dir_sessao=dir_sessao,
         duracao_pedida=duracao_pedida,
-        duracao_real=duracao_pedida,
-        encerrada_pelo_usuario=False,
+        duracao_real=duracao_real,
+        encerrada_pelo_usuario=encerrada_pelo_usuario,
         status=resultado.status,
         minutos_capturados=manifest.minutos_capturados,
         minutos_perdidos=manifest.minutos_perdidos,
