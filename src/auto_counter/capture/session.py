@@ -257,6 +257,7 @@ def capturar(
     agora: Callable[[], datetime],
     dormir: Callable[[float], None],
     parada: Parada | None = None,
+    manter_videos: bool = False,
 ) -> ResultadoDaSessao:
     """Captura N minutos de clipes da câmera e devolve o desfecho da sessão.
 
@@ -280,6 +281,11 @@ def capturar(
     encerramento fica registrado no manifest, e os minutos já capturados seguem
     para processamento: o retorno é um resultado de sessão normal, com status
     próprio, e não um erro. Enquanto `parada` for `None`, o laço vai até N.
+
+    `manter_videos` é a decisão de preservação de AC-003.5, desligada por padrão
+    (SUP-012): ela só é **gravada** no manifest aqui. A captura nunca apaga
+    vídeo — quem descarta é o encerramento da sessão, depois que
+    `contagem-veiculos` terminar (T-09, AC-007.4).
     """
     duracao_pedida = validar_duracao(minutos)
     url = url_do_clipe(camera)
@@ -292,6 +298,7 @@ def capturar(
         id_sessao=id_sessao,
         id_camera=camera.id,
         duracao_pedida=duracao_pedida,
+        manter_videos=manter_videos,
     )
 
     etags_ja_aceitos: set[str] = set()
