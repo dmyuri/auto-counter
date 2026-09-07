@@ -2,7 +2,7 @@
 Este projeto usa a stack e os comandos documentados no README.md.
 
 # Regras de trabalho
-Antes de qualquer implementação, leia `.spec/constituicao.md` e a spec
+Antes de qualquer implementação, leia `.spec/constitution.md` e a spec
 da feature em que você vai implementar. Quando a tarefa envolver uma spec e o caminho
 não estiver explícito no pedido, PARE e pergunte.
 
