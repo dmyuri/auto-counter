@@ -51,6 +51,8 @@ from auto_counter.capture.duration import (
     validar_duracao,
 )
 from auto_counter.capture.session import ResultadoDaSessao, capturar
+from auto_counter.counting import model as modelo_de_deteccao
+from auto_counter.counting.model import UltralyticsAusenteError, caminho_do_modelo
 
 VARIAVEL_DATA_DIR = "AUTO_COUNTER_DATA_DIR"
 """Variável de ambiente com o diretório de dados das sessões."""
@@ -85,6 +87,12 @@ session_app = typer.Typer(
     no_args_is_help=True,
 )
 
+model_app = typer.Typer(
+    name="model",
+    help="Preparação do modelo de detecção usado no processamento (D-6).",
+    no_args_is_help=True,
+)
+
 OPCAO_CONFIG_DIR = typer.Option(
     DIRETORIO_PADRAO,
     "--config-dir",
@@ -110,6 +118,11 @@ def camera() -> None:
 @session_app.callback()
 def session() -> None:
     """Sessões de captura dos clipes de um minuto."""
+
+
+@model_app.callback()
+def model() -> None:
+    """Preparação do modelo de detecção usado no processamento."""
 
 
 def _erro(mensagem: str) -> typer.Exit:
@@ -349,5 +362,50 @@ def capturar_sessao(
     _imprime_resultado(resultado)
 
 
+@model_app.command("export")
+def exportar_modelo(
+    out: Path | None = typer.Option(
+        None,
+        "--out",
+        help=(
+            "Caminho do .onnx. Omitido, grava em "
+            "<AUTO_COUNTER_DATA_DIR>/models/yolo11n.onnx "
+            f"(ou {DATA_DIR_PADRAO}/models/yolo11n.onnx sem a variável)."
+        ),
+    ),
+    force: bool = typer.Option(
+        False,
+        "--force",
+        help="Reexporta mesmo que o arquivo já exista no destino.",
+    ),
+) -> None:
+    """Baixa o YOLO11n e o exporta para ONNX com entrada 640×640 (SUP-015).
+
+    É passo manual de preparação de máquina (D-2): o download e a exportação
+    não cabem no orçamento de tempo de AC-005.4, então nunca acontecem na
+    primeira execução do processamento.
+    """
+    destino = out or caminho_do_modelo(_data_dir())
+
+    if destino.exists() and not force:
+        # Reexportar é download de peso: o acidente não pode custar isso.
+        typer.echo(
+            f"O modelo já existe em {destino}; nada a fazer. "
+            "Use --force para reexportar."
+        )
+        raise typer.Exit(code=0)
+
+    try:
+        gravado = modelo_de_deteccao.exportar(destino)
+    except UltralyticsAusenteError as falha:
+        raise _erro(str(falha)) from falha
+    except OSError as falha:
+        raise _erro(str(falha)) from falha
+
+    typer.echo(f"Modelo exportado em {gravado}")
+    typer.echo(f"Versão do modelo: {modelo_de_deteccao.versao_do_modelo(gravado)}")
+
+
 app.add_typer(camera_app, name="camera")
 app.add_typer(session_app, name="session")
+app.add_typer(model_app, name="model")
