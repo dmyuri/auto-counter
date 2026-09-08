@@ -1,0 +1,227 @@
+"""Cruzamento da linha de contagem com sentido — T-09.
+
+Critérios cobertos, de `.spec/features/contagem-veiculos/spec.md`:
+
+- AC-006.1 — a trajetória que passa de um lado da linha para o outro registra
+  exatamente um evento com timestamp, categoria, sentido e id de rastreio;
+- AC-006.2 — quem se aproxima da linha sem atravessar não registra nada;
+- AC-006.3 — cada sentido recebe o rótulo configurado para aquela câmera, e o
+  mapeamento é ancorado na normal de SUP-003: inverter a ordem dos pontos da
+  linha inverte a normal e, com ela, os dois rótulos;
+- AC-006.4 — ida e volta dentro do mesmo clipe gera dois eventos, um por
+  sentido;
+- AC-006.6 — no máximo um evento por par (id de rastreio, sentido) dentro do
+  clipe.
+
+As trajetórias são fabricadas ponto a ponto e passam pelo rastreador de T-08
+com o dublê de ByteTrack (D-8): nenhum teste aqui carrega o `.onnx`, abre vídeo
+ou instancia o rastreador real.
+
+A linha dos testes é vertical, de `(100, 0)` a `(100, 200)`. Nessa ordem a
+normal de SUP-003 — `(dx, dy) -> (-dy, dx)` normalizada — é `(-1, 0)`, ou seja,
+aponta para a **esquerda**. Logo o veículo que anda da direita para a esquerda
+cruza no sentido da normal e recebe `sentido_a`. Isso não é leitura da
+documentação da `supervision`: é o que os dois testes de AC-006.3 fixam.
+"""
+
+from datetime import datetime, timezone
+
+import numpy as np
+import supervision as sv
+
+from auto_counter.cameras.model import Camera, Linha, Ponto
+from auto_counter.counting.config import Categoria
+from auto_counter.counting.crossing import AvaliadorDeCruzamento
+from auto_counter.counting.tracking import rastreador_para_o_clipe
+
+MINUTO = 3
+FPS = 30.0
+INICIO_DO_CLIPE = datetime(2026, 5, 4, 12, 30, 0, tzinfo=timezone.utc)
+
+CLASSE_COCO_POR_CATEGORIA = {
+    Categoria.CARRO: 2,
+    Categoria.MOTO: 3,
+    Categoria.ONIBUS: 5,
+    Categoria.CAMINHAO: 7,
+}
+
+
+def camera(p1=(100, 0), p2=(100, 200)) -> Camera:
+    """A câmera do teste, com rótulos de sentido próprios dela (AC-001.1).
+
+    Os rótulos não são genéricos de propósito: se o código fixar "entrada" e
+    "saída" — ou reaproveitar os de outra câmera —, estes testes acusam.
+    """
+    return Camera(
+        id="000013",
+        nome="Praça Renascença",
+        sentido_a="CENTRO",
+        sentido_b="ICARAI",
+        linha=Linha(p1=Ponto(x=p1[0], y=p1[1]), p2=Ponto(x=p2[0], y=p2[1])),
+    )
+
+
+def deteccao_em(x: float, y: float, categoria: Categoria, confianca: float):
+    """Uma detecção cujo **centro da base** da caixa é `(x, y)` (SUP-018).
+
+    A caixa tem 10 px de largura e 20 de altura, com a base em `y`: é o ponto
+    de contato com o solo que o avaliador tem de usar.
+    """
+    return (
+        [x - 5.0, y - 20.0, x + 5.0, y],
+        CLASSE_COCO_POR_CATEGORIA[categoria],
+        categoria,
+        confianca,
+    )
+
+
+def frame(*deteccoes) -> sv.Detections:
+    """Monta as `sv.Detections` de um frame no formato que o detector entrega."""
+    return sv.Detections(
+        xyxy=np.array([caixa for caixa, _, _, _ in deteccoes], dtype=np.float32),
+        confidence=np.array(
+            [confianca for _, _, _, confianca in deteccoes], dtype=np.float32
+        ),
+        class_id=np.array([classe for _, classe, _, _ in deteccoes], dtype=int),
+        data={
+            "categoria": np.array([categoria.value for _, _, categoria, _ in deteccoes])
+        },
+    )
+
+
+class ByteTrackDuble:
+    """Dublê do `ByteTrack` (D-8): devolve os ids que o teste ditar."""
+
+    def __init__(self, ids_por_frame):
+        self._ids_por_frame = list(ids_por_frame)
+        self._frame = 0
+
+    def update_with_detections(self, deteccoes_do_frame):
+        ids = self._ids_por_frame[self._frame]
+        self._frame += 1
+        return sv.Detections(
+            xyxy=deteccoes_do_frame.xyxy,
+            confidence=deteccoes_do_frame.confidence,
+            class_id=deteccoes_do_frame.class_id,
+            tracker_id=np.array(ids, dtype=int),
+            data=dict(deteccoes_do_frame.data),
+        )
+
+
+def eventos_da_trajetoria(
+    posicoes,
+    *,
+    camera_do_teste=None,
+    categoria=Categoria.CARRO,
+    confianca=0.9,
+    id_do_bytetrack=7,
+):
+    """Roda um veículo só pelas posições dadas e devolve os eventos gerados.
+
+    Cada posição é o ponto de contato com o solo em um frame analisado.
+    """
+    quadros = [frame(deteccao_em(x, y, categoria, confianca)) for x, y in posicoes]
+    ids_por_frame = [[id_do_bytetrack] for _ in posicoes]
+
+    rastreador = rastreador_para_o_clipe(MINUTO, lambda: ByteTrackDuble(ids_por_frame))
+    avaliador = AvaliadorDeCruzamento(
+        camera=camera_do_teste or camera(),
+        rastreador=rastreador,
+        inicio_do_clipe=INICIO_DO_CLIPE,
+        fps=FPS,
+    )
+
+    eventos = []
+    for indice, quadro in enumerate(quadros):
+        rastreadas = rastreador.atualizar(quadro)
+        eventos.extend(avaliador.avaliar(rastreadas, indice_do_frame=indice))
+    return eventos
+
+
+def test_AC_006_1_trajetoria_que_atravessa_a_linha_gera_exatamente_um_evento_completo():
+    """Um veículo que passa de um lado ao outro vira um evento, e só um.
+
+    O evento carrega os quatro campos que AC-006.1 exige: timestamp (pelo
+    início do clipe e o índice do frame, T-06), categoria (voto de SUP-023,
+    T-08), sentido e id de rastreio (o composto de D-9).
+    """
+    eventos = eventos_da_trajetoria(
+        [(140, 100), (120, 100), (80, 100), (60, 100)],
+        categoria=Categoria.ONIBUS,
+        id_do_bytetrack=7,
+    )
+
+    assert len(eventos) == 1
+    evento = eventos[0]
+    assert evento.categoria is Categoria.ONIBUS
+    assert evento.id_de_rastreio == f"{MINUTO}:7"
+    assert evento.sentido in {"CENTRO", "ICARAI"}
+    assert evento.minuto == MINUTO
+    # O cruzamento é visto no frame 2, que a 30 fps ainda está no segundo 0.
+    assert evento.indice_do_frame == 2
+    assert evento.timestamp == INICIO_DO_CLIPE
+    # A linha vai de y=0 a y=200 e o veículo a cruza em y=100: meio da linha.
+    assert evento.posicao_na_linha == 0.5
+
+
+def test_AC_006_2_veiculo_que_se_aproxima_sem_atravessar_nao_gera_evento():
+    """Chegar perto não é cruzar: sem tolerância de proximidade (T-09)."""
+    eventos = eventos_da_trajetoria([(160, 100), (140, 100), (120, 100), (101, 100)])
+
+    assert eventos == []
+
+
+def test_AC_006_3_sentidos_opostos_recebem_os_rotulos_configurados_para_a_camera():
+    """Dois veículos em direções opostas recebem rótulos diferentes da câmera.
+
+    O da direita para a esquerda anda no sentido da normal `(-1, 0)` de
+    SUP-003, e por isso recebe `sentido_a`; o oposto recebe `sentido_b`.
+    """
+    para_a_esquerda = eventos_da_trajetoria([(140, 100), (60, 100)], id_do_bytetrack=1)
+    para_a_direita = eventos_da_trajetoria([(60, 140), (140, 140)], id_do_bytetrack=2)
+
+    assert [evento.sentido for evento in para_a_esquerda] == ["CENTRO"]
+    assert [evento.sentido for evento in para_a_direita] == ["ICARAI"]
+
+
+def test_AC_006_3_inverter_a_ordem_dos_pontos_da_linha_troca_os_dois_rotulos():
+    """O sentido sai da normal, não da convenção interna do `LineZone`.
+
+    Invertendo `p1` e `p2` a normal de SUP-003 inverte, e a **mesma**
+    trajetória passa a receber o outro rótulo. É esta a âncora do mapeamento.
+    """
+    invertida = camera(p1=(100, 200), p2=(100, 0))
+
+    eventos = eventos_da_trajetoria([(140, 100), (60, 100)], camera_do_teste=invertida)
+
+    assert [evento.sentido for evento in eventos] == ["ICARAI"]
+
+
+def test_AC_006_4_ida_e_volta_no_mesmo_clipe_gera_dois_eventos_um_por_sentido():
+    """Cruzar e voltar são dois cruzamentos, em sentidos diferentes."""
+    eventos = eventos_da_trajetoria([(140, 100), (60, 100), (140, 100)])
+
+    assert [evento.sentido for evento in eventos] == ["CENTRO", "ICARAI"]
+
+
+def test_AC_006_6_mesmo_rastreio_cruzando_duas_vezes_no_mesmo_sentido_gera_um_evento():
+    """O terceiro cruzamento repete o sentido do primeiro e é descartado.
+
+    Ida, volta e ida de novo: três cruzamentos, dois pares (id, sentido).
+    """
+    eventos = eventos_da_trajetoria([(140, 100), (60, 100), (140, 100), (60, 100)])
+
+    assert [evento.sentido for evento in eventos] == ["CENTRO", "ICARAI"]
+
+
+def test_AC_006_6_oscilacao_de_fila_sobre_a_linha_nao_infla_a_contagem():
+    """Veículo parado oscilando sobre a linha conta no máximo uma vez por sentido.
+
+    É o caso de Q-004: sem AC-006.6 esta trajetória geraria sete eventos.
+    """
+    oscilacao = [(102, 100), (98, 100)] * 4
+
+    eventos = eventos_da_trajetoria(oscilacao)
+
+    assert len(eventos) == 2
+    assert {evento.sentido for evento in eventos} == {"CENTRO", "ICARAI"}
