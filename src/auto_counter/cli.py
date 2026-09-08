@@ -50,9 +50,24 @@ from auto_counter.capture.duration import (
     DuracaoForaDoIntervaloError,
     validar_duracao,
 )
+from auto_counter.capture.cleanup import descartar_videos
+from auto_counter.capture.manifest import NOME_DO_MANIFEST, diretorio_da_sessao
+from auto_counter.capture.manifest import ler as ler_manifest
 from auto_counter.capture.session import ResultadoDaSessao, capturar
 from auto_counter.counting import model as modelo_de_deteccao
-from auto_counter.counting.model import UltralyticsAusenteError, caminho_do_modelo
+from auto_counter.counting.clip import DetectorDoClipe
+from auto_counter.counting.config import ConfiguracaoDoProcessamento
+from auto_counter.counting.detector import Detector, criar_sessao
+from auto_counter.counting.model import (
+    ModeloAusenteError,
+    UltralyticsAusenteError,
+    caminho_do_modelo,
+)
+from auto_counter.counting.session import (
+    ResultadoDaContagem,
+    SessaoSemClipes,
+    processar_sessao,
+)
 
 VARIAVEL_DATA_DIR = "AUTO_COUNTER_DATA_DIR"
 """Variável de ambiente com o diretório de dados das sessões."""
@@ -184,6 +199,18 @@ def _cliente_http() -> httpx.Client:
     um transporte dublê, e nenhum teste toca o servidor da NitTrans.
     """
     return httpx.Client(follow_redirects=True)
+
+
+def _detector(
+    caminho_do_onnx: Path, config: ConfiguracaoDoProcessamento
+) -> DetectorDoClipe:
+    """Constrói o detector real a partir do `.onnx` (SUP-015).
+
+    Também é atributo de módulo de propósito, como `_cliente_http` e `_agora`:
+    o teste do comando troca este nome por um detector dublê (D-8), e nenhum
+    teste desta suíte carrega o modelo de verdade.
+    """
+    return Detector(criar_sessao(caminho_do_onnx), config)
 
 
 @camera_app.command("list")
@@ -360,6 +387,155 @@ def capturar_sessao(
             signal.signal(signal.SIGINT, anterior)
 
     _imprime_resultado(resultado)
+
+
+def _configuracao(threshold: float | None, sample_rate: int | None):
+    """A configuração do processamento com o que a linha de comando mudou.
+
+    Os padrões são os de T-02 (SUP-016 e SUP-017); `--threshold` e
+    `--sample-rate` existem porque as duas suplementares dizem "configurável".
+    O valor efetivamente usado é gravado no `eventos.json` (AC-008.1).
+    """
+    padrao = ConfiguracaoDoProcessamento()
+    return ConfiguracaoDoProcessamento(
+        limiar_de_confianca=(
+            padrao.limiar_de_confianca if threshold is None else threshold
+        ),
+        amostragem=padrao.amostragem if sample_rate is None else sample_rate,
+        tamanho_de_entrada=padrao.tamanho_de_entrada,
+        janela_de_emenda_em_segundos=padrao.janela_de_emenda_em_segundos,
+        tolerancia_da_assinatura=padrao.tolerancia_da_assinatura,
+    )
+
+
+def _contagem_por(eventos, atributo: str) -> str:
+    """`RÓTULO: n` de cada valor presente, em ordem, ou `nenhum`."""
+    totais: dict[str, int] = {}
+    for evento in eventos:
+        chave = getattr(evento, atributo)
+        chave = chave.value if hasattr(chave, "value") else str(chave)
+        totais[chave] = totais.get(chave, 0) + 1
+    return ", ".join(f"{chave}: {totais[chave]}" for chave in sorted(totais)) or "nenhum"
+
+
+def _imprime_contagem(
+    resultado: ResultadoDaContagem,
+    camera_: Camera,
+    config: ConfiguracaoDoProcessamento,
+) -> None:
+    """Relatório final do processamento: o que foi contado e com o quê."""
+    registro = resultado.registro
+    processados = ", ".join(str(m) for m in resultado.minutos_processados) or "nenhum"
+    sem_dado = (
+        ", ".join(
+            f"{item.minuto} ({item.motivo})" for item in resultado.minutos_nao_processados
+        )
+        or "nenhum"
+    )
+    typer.echo(f"Sessão:            {registro.id_sessao}")
+    typer.echo(f"Câmera:            {camera_.id}  {camera_.nome}")
+    typer.echo(f"Minutos com dado:  {processados}")
+    typer.echo(f"Minutos sem dado:  {sem_dado}")
+    typer.echo(f"Total de eventos:  {len(resultado.eventos)}")
+    typer.echo(f"Por sentido:       {_contagem_por(resultado.eventos, 'sentido')}")
+    typer.echo(f"Por categoria:     {_contagem_por(resultado.eventos, 'categoria')}")
+    typer.echo(f"Versão do modelo:  {registro.versao_do_modelo}")
+    typer.echo(f"Limiar:            {config.limiar_de_confianca}")
+    typer.echo(f"Amostragem:        1 frame a cada {config.amostragem}")
+    typer.echo(f"Eventos em:        {resultado.caminho}")
+
+
+@session_app.command("process")
+def processar_sessao_capturada(
+    id_sessao: str = typer.Argument(
+        ...,
+        metavar="ID_SESSAO",
+        help="Id da sessão, como no diretório de dados (ex.: 000013-...Z).",
+    ),
+    threshold: float | None = typer.Option(
+        None,
+        "--threshold",
+        help=(
+            "Limiar de confiança das detecções. Padrão: "
+            f"{ConfiguracaoDoProcessamento().limiar_de_confianca} (SUP-016)."
+        ),
+    ),
+    sample_rate: int | None = typer.Option(
+        None,
+        "--sample-rate",
+        help=(
+            "Analisa 1 frame a cada N. Padrão: "
+            f"{ConfiguracaoDoProcessamento().amostragem} (SUP-017)."
+        ),
+    ),
+    config_dir: Path = OPCAO_CONFIG_DIR,
+) -> None:
+    """Conta e classifica os veículos dos clipes de uma sessão já capturada.
+
+    A câmera **não** é redigitada: vem do `id_camera` gravado no manifest, para
+    que a linha de contagem usada seja a daquela câmera (`CLAUDE.md`).
+
+    Terminado o processamento **com sucesso**, os vídeos da sessão são
+    descartados, a menos que o manifest traga `manter_videos` (AC-003.5, D-5).
+    Processamento que falha não apaga nada.
+    """
+    try:
+        config = _configuracao(threshold, sample_rate)
+    except ValueError as falha:
+        raise _erro(str(falha)) from falha
+
+    data_dir = _data_dir()
+    dir_sessao = diretorio_da_sessao(data_dir, id_sessao)
+    if not (dir_sessao / NOME_DO_MANIFEST).is_file():
+        raise _erro(
+            f"sessão '{id_sessao}' não encontrada: não há "
+            f"{NOME_DO_MANIFEST} em {dir_sessao}"
+        )
+
+    try:
+        manifest = ler_manifest(dir_sessao)
+    except (OSError, ValueError, KeyError) as falha:
+        raise _erro(
+            f"o {NOME_DO_MANIFEST} de {dir_sessao} não pôde ser lido: {falha}"
+        ) from falha
+
+    registro = _carrega(config_dir)
+    escolhida = _camera_do_registro(registro, manifest.id_camera, config_dir)
+
+    # O modelo é conferido **antes** de abrir qualquer vídeo: descobrir que ele
+    # falta depois de minutos de processamento seria desperdício puro.
+    caminho_do_onnx = caminho_do_modelo(data_dir)
+    try:
+        versao = modelo_de_deteccao.versao_do_modelo(caminho_do_onnx)
+    except ModeloAusenteError as falha:
+        raise _erro(str(falha)) from falha
+    except OSError as falha:
+        raise _erro(str(falha)) from falha
+
+    try:
+        resultado = processar_sessao(
+            dir_sessao,
+            camera=escolhida,
+            detector=_detector(caminho_do_onnx, config),
+            config=config,
+            versao_do_modelo=versao,
+        )
+    except SessaoSemClipes as falha:
+        raise _erro(str(falha)) from falha
+    except OSError as falha:
+        raise _erro(str(falha)) from falha
+
+    _imprime_contagem(resultado, escolhida, config)
+
+    # D-5: só aqui, com o processamento terminado, os vídeos podem ir embora.
+    if manifest.manter_videos:
+        typer.echo("Clipes:            preservados (manter_videos na sessão)")
+    else:
+        apagados = descartar_videos(dir_sessao)
+        typer.echo(
+            f"Clipes:            {apagados} arquivo(s) de vídeo apagado(s); "
+            "esta sessão não pode mais ser reprocessada"
+        )
 
 
 @model_app.command("export")
