@@ -42,6 +42,7 @@ Sempre que precisar perguntar algo ao usuário:
 - Migrations e schemas de dados já commitados são imutáveis. Mudança
   de schema (ex.: nova categoria de veículo, novo campo na planilha) =
   migration/versão nova.
+- Não inclua o ID, número ou código da tarefa no commit (ex.: T-03, T02, etc). A descrição deve conter somente uma descrição objetiva da alteração realizada, sem referência à tarefa que a originou.
 
 ## Convenções
 - Toda história recebe ID: US-001, US-002...
