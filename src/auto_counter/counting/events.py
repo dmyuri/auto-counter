@@ -166,11 +166,12 @@ class RegistroDeEventos:
     """O conteúdo inteiro do `eventos.json` de uma sessão.
 
     Congelado pelo mesmo motivo de `ConfiguracaoDoProcessamento`: o que é
-    gravado tem de ser o que foi usado. O laço de processamento monta as tuplas
-    e grava uma vez — diferente do `manifest.json`, que é escrito
-    incrementalmente porque a URL da NitTrans não tem histórico e uma queda no
-    meio da captura levaria os minutos anteriores junto. Aqui os clipes já estão
-    em disco: uma queda no processamento é reprocessável.
+    gravado tem de ser o que foi usado. Cada minuto concluído remonta o registro
+    e grava — o laço da sessão (T-12) escreve incrementalmente, pelo mesmo
+    motivo do `manifest.json`: uma queda no minuto 14 não pode levar junto os 13
+    minutos já analisados. Reprocessar nem sempre é possível, porque o descarte
+    dos vídeos (D-5) acontece ao fim do processamento e, sem `--keep-clips`,
+    aquela sessão não tem mais o que reprocessar.
     """
 
     id_sessao: str

@@ -1,0 +1,361 @@
+"""Processamento da sessão inteira, minuto a minuto — T-12.
+
+Critérios cobertos, de `.spec/features/contagem-veiculos/spec.md`:
+
+- AC-007.1 — um cruzamento no fim de um clipe e outro de assinatura compatível
+  no início do clipe imediatamente seguinte contam uma vez só;
+- AC-007.2 — assinaturas diferentes nos dois lados da emenda contam duas vezes;
+- AC-007.3 — o rastreador reinicia a cada clipe e nenhum id de rastreio se
+  repete entre os minutos da sessão;
+- AC-007.4 — minuto perdido entre dois clipes quebra a adjacência e desliga a
+  janela de deduplicação; e a sessão `INVALIDA` é processada normalmente
+  (SUP-021).
+
+Mais os dois ramos de D-4: clipe ausente vira minuto não processado e a sessão
+segue; sessão sem nenhum clipe em disco falha com erro explícito.
+
+Os clipes são vídeos sintéticos escritos com `cv2.VideoWriter`, e o detector e
+o ByteTrack são dublês (D-8) — nenhum teste aqui carrega o `.onnx`. Se o codec
+`mp4v` não existir na máquina, o teste **falha**: `audit.py` trata teste pulado
+igual a teste que falhou.
+
+A linha é a mesma dos testes de T-09 e T-11: vertical, de `(100, 0)` a
+`(100, 200)`. A normal de SUP-003 aponta para a esquerda, então quem anda da
+direita para a esquerda recebe `sentido_a`.
+
+Cada clipe tem 6 quadros e amostragem 3, ou seja **dois** frames analisados por
+clipe — o mínimo para haver cruzamento — e 0,2 s de duração, bem dentro da
+janela de 2 s de AC-007.1 dos dois lados do corte.
+"""
+
+from datetime import datetime, timedelta, timezone
+from pathlib import Path
+
+import cv2
+import numpy as np
+import pytest
+import supervision as sv
+
+from auto_counter.cameras.model import Camera, Linha, Ponto
+from auto_counter.capture.manifest import ManifestDaSessao, nome_do_arquivo_do_minuto
+from auto_counter.capture.status import StatusDaSessao
+from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
+from auto_counter.counting.events import NOME_DO_ARQUIVO_DE_EVENTOS
+from auto_counter.counting.events import ler as ler_eventos
+from auto_counter.counting.session import SessaoSemClipes, processar_sessao
+
+LARGURA = 128
+ALTURA = 48
+FPS = 30.0
+QUADROS_POR_CLIPE = 6
+AMOSTRAGEM = 3
+ID_CAMERA = "000013"
+ID_SESSAO = "000013-20260504T123000Z"
+VERSAO_DO_MODELO = "yolo11n.onnx@0123456789ab"
+PRIMEIRO_LAST_MODIFIED = datetime(2026, 5, 4, 12, 30, 0, tzinfo=timezone.utc)
+
+CLASSE_COCO_POR_CATEGORIA = {
+    Categoria.CARRO: 2,
+    Categoria.MOTO: 3,
+    Categoria.ONIBUS: 5,
+    Categoria.CAMINHAO: 7,
+}
+
+DIREITA = (110.0, 40.0)
+ESQUERDA = (90.0, 40.0)
+CRUZA_PARA_A_ESQUERDA = (DIREITA, ESQUERDA)
+"""As duas posições analisadas de um clipe em que o veículo cruza a linha."""
+
+
+def camera() -> Camera:
+    """A câmera do teste, com os rótulos de sentido dela (AC-001.1)."""
+    return Camera(
+        id=ID_CAMERA,
+        nome="Praça Renascença",
+        sentido_a="CENTRO",
+        sentido_b="ICARAI",
+        linha=Linha(p1=Ponto(x=100, y=0), p2=Ponto(x=100, y=200)),
+    )
+
+
+class DetectorDuble:
+    """Dublê do detector (D-8): um roteiro de posições e categorias.
+
+    O roteiro é consumido na ordem dos frames **analisados**, atravessando os
+    clipes da sessão: o item `i` é o `i`-ésimo frame que chegou ao detector,
+    seja de que minuto for. É isso que deixa o teste fabricar um cruzamento no
+    fim de um clipe e outro no início do seguinte. Item `None` é frame sem
+    ninguém em cena.
+    """
+
+    def __init__(self, roteiro, confianca: float = 0.9):
+        self._roteiro = list(roteiro)
+        self._confianca = confianca
+        self.chamadas = 0
+
+    def detectar(self, frame: np.ndarray) -> sv.Detections:
+        indice = self.chamadas
+        self.chamadas += 1
+        if indice >= len(self._roteiro) or self._roteiro[indice] is None:
+            return sv.Detections.empty()
+        posicao, categoria = self._roteiro[indice]
+        x, y = posicao
+        return sv.Detections(
+            xyxy=np.array([[x - 5.0, y - 20.0, x + 5.0, y]], dtype=np.float32),
+            confidence=np.array([self._confianca], dtype=np.float32),
+            class_id=np.array([CLASSE_COCO_POR_CATEGORIA[categoria]], dtype=int),
+            data={"categoria": np.array([categoria.value])},
+        )
+
+
+class ByteTrackDuble:
+    """Dublê do `ByteTrack` (D-8): id fixo para o único veículo em cena.
+
+    O id é **o mesmo** em todos os clipes de propósito: é assim que AC-007.3
+    fica verificável — se `processar_sessao` reaproveitasse o rastreador, ou
+    não compusesse o id com o minuto (D-9), os ids da sessão colidiriam.
+    """
+
+    def __init__(self, id_do_bytetrack: int = 7):
+        self._id = id_do_bytetrack
+
+    def update_with_detections(self, deteccoes):
+        if len(deteccoes) == 0:
+            return deteccoes
+        return sv.Detections(
+            xyxy=deteccoes.xyxy,
+            confidence=deteccoes.confidence,
+            class_id=deteccoes.class_id,
+            tracker_id=np.array([self._id] * len(deteccoes), dtype=int),
+            data=dict(deteccoes.data),
+        )
+
+
+def roteiro_do_clipe(posicoes, categoria: Categoria = Categoria.CARRO):
+    """As duas entradas de roteiro de um clipe com um veículo em cena."""
+    return [(posicao, categoria) for posicao in posicoes]
+
+
+def escreve_clipe(caminho: Path) -> Path:
+    """Um MP4 válido e curto, do tamanho fixo de todos os clipes do teste."""
+    escritor = cv2.VideoWriter(
+        str(caminho), cv2.VideoWriter_fourcc(*"mp4v"), FPS, (LARGURA, ALTURA)
+    )
+    assert escritor.isOpened(), (
+        "o codec mp4v não está disponível nesta máquina e a fixture de vídeo "
+        "válido não pôde ser gerada"
+    )
+    try:
+        for _ in range(QUADROS_POR_CLIPE):
+            escritor.write(np.zeros((ALTURA, LARGURA, 3), dtype=np.uint8))
+    finally:
+        escritor.release()
+    assert caminho.exists() and caminho.stat().st_size > 0
+    return caminho
+
+
+def monta_sessao(
+    tmp_path: Path,
+    *,
+    minutos_capturados,
+    minutos_perdidos=(),
+    minutos_sem_arquivo=(),
+    status: StatusDaSessao = StatusDaSessao.COMPLETA,
+) -> Path:
+    """Cria o diretório da sessão com manifest e clipes, e devolve o caminho.
+
+    `minutos_sem_arquivo` são minutos que o manifest declara capturados mas
+    cujo `.mp4` não existe em disco — o ramo de clipe ausente de D-4.
+    """
+    dir_sessao = tmp_path / "sessions" / ID_SESSAO
+    manifest = ManifestDaSessao(
+        dir_sessao,
+        id_sessao=ID_SESSAO,
+        id_camera=ID_CAMERA,
+        duracao_pedida=max([*minutos_capturados, *minutos_perdidos], default=0),
+        status=status,
+    )
+    dir_sessao.mkdir(parents=True, exist_ok=True)
+    for minuto in sorted([*minutos_capturados, *minutos_perdidos]):
+        if minuto in minutos_perdidos:
+            manifest.registrar_perda(minuto, motivo="ETag parado na janela")
+            continue
+        manifest.registrar_minuto(
+            minuto,
+            etag=f"etag-{minuto}",
+            last_modified=PRIMEIRO_LAST_MODIFIED + timedelta(minutes=minuto - 1),
+            relogio_local=PRIMEIRO_LAST_MODIFIED + timedelta(minutes=minuto - 1),
+        )
+        if minuto not in minutos_sem_arquivo:
+            escreve_clipe(dir_sessao / nome_do_arquivo_do_minuto(minuto))
+    return dir_sessao
+
+
+def processa(dir_sessao: Path, detector: DetectorDuble):
+    """Roda `processar_sessao` com os dublês e a configuração do teste."""
+    return processar_sessao(
+        dir_sessao,
+        camera=camera(),
+        detector=detector,
+        config=ConfiguracaoDoProcessamento(amostragem=AMOSTRAGEM),
+        versao_do_modelo=VERSAO_DO_MODELO,
+        fabrica_de_bytetrack=lambda: ByteTrackDuble(),
+    )
+
+
+def test_AC_007_1_veiculo_na_emenda_entre_dois_minutos_adjacentes_conta_uma_vez(
+    tmp_path,
+):
+    """Mesma categoria, mesmo sentido e mesma posição nos dois lados do corte.
+
+    Os minutos 1 e 2 são consecutivos e os dois foram capturados, então são
+    adjacentes: o cruzamento do início do minuto 2 é a continuação do que
+    aconteceu no fim do minuto 1, e não gera evento novo.
+    """
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+    )
+
+    resultado = processa(dir_sessao, detector)
+
+    assert len(resultado.eventos) == 1
+    assert resultado.eventos[0].minuto == 1
+    assert resultado.minutos_processados == (1, 2)
+
+
+def test_AC_007_2_veiculos_distintos_na_emenda_contam_os_dois(tmp_path):
+    """Categorias diferentes nos dois lados do corte são veículos diferentes.
+
+    A assinatura de SUP-019 é categoria + sentido + posição; basta a categoria
+    divergir para que o pareamento da emenda não aconteça e os dois cruzamentos
+    contem.
+    """
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+
+    resultado = processa(dir_sessao, detector)
+
+    assert len(resultado.eventos) == 2
+    assert [evento.minuto for evento in resultado.eventos] == [1, 2]
+    assert {evento.categoria for evento in resultado.eventos} == {
+        Categoria.CARRO,
+        Categoria.ONIBUS,
+    }
+
+
+def test_AC_007_3_ids_de_rastreio_da_sessao_inteira_nao_se_repetem_entre_minutos(
+    tmp_path,
+):
+    """Três minutos, o mesmo id de ByteTrack, e três ids de rastreio distintos.
+
+    Os cruzamentos têm categorias diferentes só para que a emenda não suprima
+    nenhum deles — o que está sob teste aqui é o id, e o teste precisa dos três
+    eventos para poder compará-los.
+    """
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2, 3))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CAMINHAO)
+    )
+
+    resultado = processa(dir_sessao, detector)
+
+    ids = [evento.id_de_rastreio for evento in resultado.eventos]
+    assert len(ids) == 3
+    assert len(set(ids)) == 3
+    assert ids == ["1:7", "2:7", "3:7"]
+
+
+def test_AC_007_4_minuto_perdido_entre_dois_clipes_desliga_a_janela_de_deduplicacao(
+    tmp_path,
+):
+    """Minutos 1 e 3 capturados, minuto 2 perdido: os dois cruzamentos contam.
+
+    As assinaturas são idênticas — o mesmo par que AC-007.1 deduplicaria. O que
+    muda é só a adjacência: os clipes não se tocam no tempo, então nenhum
+    cruzamento de um pode ser a continuação do outro.
+    """
+    dir_sessao = monta_sessao(
+        tmp_path,
+        minutos_capturados=(1, 3),
+        minutos_perdidos=(2,),
+        status=StatusDaSessao.DEGRADADA,
+    )
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+    )
+
+    resultado = processa(dir_sessao, detector)
+
+    assert len(resultado.eventos) == 2
+    assert [evento.minuto for evento in resultado.eventos] == [1, 3]
+    assert resultado.minutos_processados == (1, 3)
+    assert [item.minuto for item in resultado.minutos_nao_processados] == [2]
+
+
+def test_AC_007_4_sessao_invalida_e_processada_normalmente(tmp_path):
+    """SUP-021: o status qualifica o resultado, não impede o processamento."""
+    dir_sessao = monta_sessao(
+        tmp_path, minutos_capturados=(1,), status=StatusDaSessao.INVALIDA
+    )
+    detector = DetectorDuble(roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA))
+
+    resultado = processa(dir_sessao, detector)
+
+    assert len(resultado.eventos) == 1
+    assert resultado.minutos_processados == (1,)
+    assert (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+
+
+def test_minuto_com_clipe_ausente_vira_minuto_sem_dado_e_a_sessao_segue(tmp_path):
+    """D-4: o minuto sem `.mp4` é registrado com motivo e a sessão continua.
+
+    E, pela mesma regra de AC-007.4, o minuto não processado quebra a
+    adjacência: os cruzamentos dos minutos 1 e 3 contam os dois, mesmo com
+    assinatura compatível.
+    """
+    dir_sessao = monta_sessao(
+        tmp_path, minutos_capturados=(1, 2, 3), minutos_sem_arquivo=(2,)
+    )
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+    )
+
+    resultado = processa(dir_sessao, detector)
+
+    assert resultado.minutos_processados == (1, 3)
+    nao_processados = resultado.minutos_nao_processados
+    assert [item.minuto for item in nao_processados] == [2]
+    assert nao_processados[0].motivo
+    assert [evento.minuto for evento in resultado.eventos] == [1, 3]
+
+    gravado = ler_eventos(dir_sessao)
+    assert gravado.minutos_processados == (1, 3)
+    assert [item.minuto for item in gravado.minutos_nao_processados] == [2]
+    assert len(gravado.eventos) == 2
+
+
+def test_sessao_sem_nenhum_clipe_em_disco_falha_com_erro_explicito(tmp_path):
+    """D-4: contagem zerada não pode sair com cara de resultado válido.
+
+    Nem o `eventos.json` pode ficar no disco: a sessão provavelmente já foi
+    descartada por D-5, e um arquivo zerado ali seria lido depois como se
+    nenhum veículo tivesse passado.
+    """
+    dir_sessao = monta_sessao(
+        tmp_path, minutos_capturados=(1, 2), minutos_sem_arquivo=(1, 2)
+    )
+    detector = DetectorDuble([])
+
+    with pytest.raises(SessaoSemClipes):
+        processa(dir_sessao, detector)
+
+    assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
