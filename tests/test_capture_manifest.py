@@ -295,3 +295,58 @@ def test_AC_003_1_minuto_repetido_no_manifest_e_erro_de_programacao(tmp_path):
 
     with pytest.raises(ValueError):
         manifest.registrar_perda(1, motivo="o ETag não mudou dentro da janela")
+
+
+def test_AC_004_7_manifest_grava_o_sha256_de_cada_clipe_aceito(tmp_path):
+    """AC-004.7 (via SUP-051): o hash do conteúdo entra no registro do minuto.
+
+    Fica ao lado do ETag e do Last-Modified de AC-003.1, e não no lugar deles:
+    o ETag continua identificando o recurso no servidor (SUP-009). É campo novo
+    em schema já commitado, então o manifest passa a ser gravado na versão 2.
+    """
+    manifest = manifest_novo(tmp_path, duracao_pedida=3)
+
+    manifest.registrar_minuto(
+        2,
+        etag="etag-do-minuto-2",
+        last_modified=last_modified(2),
+        relogio_local=RELOGIO_DO_COMANDO + timedelta(minutes=2),
+        sha256="a" * 64,
+    )
+
+    dados = json_do_disco(manifest)
+    assert dados["versao"] == 2
+
+    (entrada,) = dados["minutos"]
+    assert entrada["sha256"] == "a" * 64
+    assert entrada["etag"] == "etag-do-minuto-2"
+
+    relido = ler(manifest.dir_sessao)
+    (minuto,) = relido.minutos_capturados
+    assert minuto.sha256 == "a" * 64
+
+
+def test_AC_004_7_manifest_da_versao_1_continua_legivel_com_sha256_nulo(tmp_path):
+    """AC-004.7 (via SUP-051): sessão gravada antes desta tarefa continua legível.
+
+    Existem manifests versão 1 em disco, e `contagem-veiculos` os lê para saber
+    quais minutos existem (AC-007.4). Neles o `sha256` é **nulo** — significa
+    "não registrado" —, nunca string vazia e nunca erro de leitura.
+    """
+    manifest = manifest_novo(tmp_path, duracao_pedida=3)
+    capturar(manifest, 1)
+
+    # Rebaixa o arquivo para o formato versão 1: sem `sha256` em nenhum minuto.
+    dados = json_do_disco(manifest)
+    dados["versao"] = 1
+    for entrada in dados["minutos"]:
+        entrada.pop("sha256", None)
+    manifest.caminho.write_text(
+        json.dumps(dados, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    relido = ler(manifest.dir_sessao)
+    (minuto,) = relido.minutos_capturados
+    assert minuto.sha256 is None
+    assert minuto.etag == "etag-do-minuto-1"
+    assert minuto.last_modified == last_modified(1)

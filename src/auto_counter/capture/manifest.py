@@ -44,11 +44,16 @@ SUBDIRETORIO_DE_SESSOES = "sessions"
 FORMATO_DO_ID_DE_SESSAO = "%Y%m%dT%H%M%SZ"
 """Carimbo de tempo do id de sessão, no formato de D-5 (`AAAAMMDDTHHMMSSZ`)."""
 
-VERSAO_DO_MANIFEST = 1
+VERSAO_DO_MANIFEST = 2
 """Versão do formato gravado.
 
 `persistencia-resultados` vai ler este arquivo; sem um número de versão, uma
 mudança futura de formato seria indistinguível de um arquivo corrompido.
+
+Subiu de 1 para 2 quando o `sha256` do clipe entrou na entrada de minuto
+(SUP-051): schema já commitado é imutável (`CLAUDE.md`), então campo novo é
+versão nova. Manifests versão 1 continuam sendo lidos — neles o `sha256` é
+nulo, porque não foi registrado.
 """
 
 
@@ -118,6 +123,10 @@ class MinutoCapturado:
     diagnóstico e nada mais, e na serialização carrega isso no próprio nome da
     chave (`relogio_local_diagnostico`), para que ninguém o confunda com a
     referência de tempo da sessão ao ler o JSON.
+
+    O `sha256` é a identidade de **conteúdo** de SUP-051, ao lado do ETag e não
+    no lugar dele: o ETag pode mudar sem que o vídeo mude, e é isso que AC-004.7
+    passa a recusar. É nulo em manifest versão 1, gravado antes do campo existir.
     """
 
     minuto: int
@@ -125,6 +134,7 @@ class MinutoCapturado:
     etag: str
     last_modified: datetime
     relogio_local: datetime
+    sha256: str | None = None
 
 
 @dataclass(frozen=True)
@@ -277,6 +287,7 @@ class ManifestDaSessao:
         last_modified: datetime,
         relogio_local: datetime,
         arquivo: str | None = None,
+        sha256: str | None = None,
     ) -> MinutoCapturado:
         """Registra um minuto capturado e grava o manifest no ato (AC-003.1).
 
@@ -291,6 +302,7 @@ class ManifestDaSessao:
             etag=etag,
             last_modified=_em_utc(last_modified),
             relogio_local=_em_utc(relogio_local),
+            sha256=sha256,
         )
         self._capturados.append(capturado)
         self._capturados.sort(key=lambda item: item.minuto)
@@ -360,6 +372,7 @@ class ManifestDaSessao:
                     "relogio_local_diagnostico": _serializa_instante(
                         item.relogio_local
                     ),
+                    "sha256": item.sha256,
                 }
                 for item in self._capturados
             ],
@@ -421,6 +434,9 @@ def ler(dir_sessao: str | Path) -> ManifestDaSessao:
                 relogio_local=_desserializa_instante(
                     entrada["relogio_local_diagnostico"]
                 ),
+                # `get`, e não `[]`: manifest versão 1 não tem o campo, e a
+                # ausência significa "não registrado" (SUP-051).
+                sha256=entrada.get("sha256"),
             )
             for entrada in dados["minutos"]
         ),
