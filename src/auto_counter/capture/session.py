@@ -8,6 +8,9 @@ Comportamento em `.spec/features/captura-clipes/spec.md`:
   sistema aguarda a próxima checagem;
 - AC-004.2 — ETag parado por toda a janela marca o minuto como não capturado e
   a captura **segue para o minuto seguinte, sem interromper a sessão**;
+- AC-004.7 — clipe cujo conteúdo é byte a byte igual ao do clipe imediatamente
+  anterior aceito é descartado, não abre minuto e a janela continua; esgotada a
+  janela sem conteúdo inédito, o minuto é perdido pela mesma regra de AC-004.2;
 - AC-004.1 e AC-004.3 entram aqui como tradução: download esgotado e clipe
   ilegível viram desfecho de minuto, nunca exceção para o usuário.
 
@@ -39,6 +42,7 @@ import httpx
 
 from auto_counter.cameras.model import Camera
 from auto_counter.cameras.url import url_do_clipe
+from auto_counter.capture.content import sha256_do_arquivo
 from auto_counter.capture.download import DownloadFalhouError, baixar
 from auto_counter.capture.duration import validar_duracao
 from auto_counter.capture.manifest import (
@@ -68,6 +72,16 @@ MOTIVO_JANELA_ESGOTADA = (
     "ou as checagens não trouxeram ETag e Last-Modified utilizáveis"
 )
 """Perda por AC-004.2 e por D-4 — para o minuto, os dois são o mesmo desfecho."""
+
+MOTIVO_CONTEUDO_REPETIDO = (
+    "o servidor republicou o clipe do minuto anterior com ETag novo ({etag}) e "
+    "conteúdo repetido; a janela se esgotou sem clipe inédito"
+)
+"""Perda por AC-004.7.
+
+Texto próprio, e não o de AC-004.2: quem ler o manifest depois precisa saber
+que o arquivo era o mesmo, e não que o ETag ficou parado (SUP-051).
+"""
 
 
 class Parada(Protocol):
@@ -109,10 +123,15 @@ class ResultadoDaSessao:
 
 @dataclass(frozen=True)
 class _ClipeAceito:
-    """Um clipe que baixou, abriu como vídeo e já está no lugar definitivo."""
+    """Um clipe que baixou, abriu como vídeo e já está no lugar definitivo.
+
+    `sha256` é a identidade de conteúdo de SUP-051: vai para o manifest (T-12)
+    e é o que a janela do minuto seguinte compara para aplicar AC-004.7.
+    """
 
     checagem: Checagem
     arquivo: str
+    sha256: str
 
 
 @dataclass(frozen=True)
@@ -145,6 +164,7 @@ def _janela_de_um_minuto(
     url: str,
     dir_sessao: Path,
     etags_ja_aceitos: set[str],
+    sha256_do_anterior: str | None,
     inicio_da_janela: datetime,
     agora: Callable[[], datetime],
     dormir: Callable[[float], None],
@@ -161,6 +181,10 @@ def _janela_de_um_minuto(
       a legibilidade (AC-004.3);
     - clipe ilegível → descarta o arquivo e **continua checando dentro do que
       sobrou da janela**, porque o servidor pode publicar outro clipe;
+    - clipe de conteúdo igual ao do minuto anterior aceito → o mesmo caminho do
+      ilegível: descarta e continua na janela (AC-004.7). A comparação é só com
+      o clipe **imediatamente anterior** (SUP-051), com a consequência assumida
+      de que repetição alternada não é detectada;
     - parada pedida entre duas checagens → a janela é abandonada e o minuto não
       existe, nem como capturado nem como perdido (AC-003.6);
     - janela vencida → minuto perdido, com o motivo.
@@ -196,7 +220,24 @@ def _janela_de_um_minuto(
                 return _MinutoPerdido(motivo=str(erro))
 
             if e_legivel(destino):
-                return _ClipeAceito(checagem=checagem, arquivo=destino.name)
+                sha256 = sha256_do_arquivo(destino)
+                if sha256 != sha256_do_anterior:
+                    return _ClipeAceito(
+                        checagem=checagem, arquivo=destino.name, sha256=sha256
+                    )
+
+                # AC-004.7: o ETag é novo, mas o vídeo é o do minuto anterior.
+                # Mesmo caminho do clipe ilegível — o arquivo não fica no
+                # diretório da sessão e a janela continua, porque o servidor
+                # ainda pode publicar o clipe de verdade.
+                descartar(destino)
+                etags_ja_aceitos.add(checagem.etag)
+                motivo = MOTIVO_CONTEUDO_REPETIDO.format(etag=checagem.etag)
+                restante = (prazo - agora()).total_seconds()
+                if restante <= 0:
+                    break
+                dormir(min(INTERVALO_ENTRE_CHECAGENS, restante))
+                continue
 
             # AC-004.3: o arquivo inválido não pode ficar no diretório da
             # sessão fingindo ser material capturado, e a janela continua.
@@ -302,6 +343,10 @@ def capturar(
     )
 
     etags_ja_aceitos: set[str] = set()
+    # O hash do último clipe aceito é o lado esquerdo da comparação de
+    # AC-004.7. Nulo enquanto nenhum minuto foi capturado: o primeiro clipe da
+    # sessão não tem anterior com que ser comparado e é aceito direto (D-2).
+    sha256_do_anterior: str | None = None
     inicio_da_janela = relogio_do_comando
     encerrada_pelo_usuario = False
 
@@ -316,6 +361,7 @@ def capturar(
             url=url,
             dir_sessao=dir_sessao,
             etags_ja_aceitos=etags_ja_aceitos,
+            sha256_do_anterior=sha256_do_anterior,
             inicio_da_janela=inicio_da_janela,
             agora=agora,
             dormir=dormir,
@@ -334,7 +380,9 @@ def capturar(
                 last_modified=desfecho.checagem.last_modified,
                 relogio_local=desfecho.checagem.relogio_local,
                 arquivo=desfecho.arquivo,
+                sha256=desfecho.sha256,
             )
+            sha256_do_anterior = desfecho.sha256
         else:
             manifest.registrar_perda(minuto, motivo=desfecho.motivo)
 

@@ -40,7 +40,7 @@ from tests.test_capture_session import (  # noqa: F401  (dublês reusados de T-0
     DormirFalso,
     RelogioFalso,
     ServidorFalso,
-    clipe_legivel,
+    clipes_legiveis,
 )
 
 FIXTURES = Path(__file__).parent / "fixtures" / "cameras"
@@ -86,11 +86,15 @@ def liga_o_servidor(monkeypatch, servidor, relogio, dormir=None):
     monkeypatch.setattr("auto_counter.cli._dormir", dormir or DormirFalso(relogio))
 
 
-def servidor_de_um_clipe_por_minuto(relogio, clipe, minutos: int):
-    """Publica um ETag novo a cada 60 s, sem falha nenhuma."""
+def servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos: int):
+    """Publica um clipe novo a cada 60 s, sem falha nenhuma.
+
+    Conteúdo próprio por minuto, e não só ETag novo: republicar o mesmo vídeo é
+    recusado desde AC-004.7 e viraria minuto perdido.
+    """
     publicacoes = [(60.0 * indice, f"clipe-{indice:02d}") for indice in range(minutos)]
     return ServidorFalso(
-        relogio, publicacoes, {etag: clipe for _, etag in publicacoes}
+        relogio, publicacoes, clipes_legiveis(*[etag for _, etag in publicacoes])
     )
 
 
@@ -171,12 +175,12 @@ def test_AC_003_3_duracao_invalida_e_recusada_antes_de_qualquer_requisicao(
 
 
 def test_AC_003_5_a_flag_de_preservar_videos_vem_desligada_por_padrao(
-    runner, registro, monkeypatch, tmp_path, clipe_legivel
+    runner, registro, monkeypatch, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
     liga_o_servidor(
         monkeypatch,
-        servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, 1),
+        servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 1),
         relogio,
     )
 
@@ -203,12 +207,12 @@ def test_AC_003_5_a_flag_de_preservar_videos_vem_desligada_por_padrao(
 
 
 def test_AC_003_5_a_flag_de_preservar_videos_ligada_fica_registrada_na_sessao(
-    runner, registro, monkeypatch, tmp_path, clipe_legivel
+    runner, registro, monkeypatch, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
     liga_o_servidor(
         monkeypatch,
-        servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, 1),
+        servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 1),
         relogio,
     )
 
@@ -233,10 +237,10 @@ def test_AC_003_5_a_flag_de_preservar_videos_ligada_fica_registrada_na_sessao(
 
 
 def test_AC_003_6_ctrl_c_encerra_a_sessao_pela_regra_de_duracao_real(
-    runner, registro, monkeypatch, tmp_path, clipe_legivel
+    runner, registro, monkeypatch, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     # O minuto 7 é aceito em t=360; o Ctrl+C chega no meio da janela do minuto
     # 8, longe de qualquer publicação, para que o desfecho não seja ambíguo.
     liga_o_servidor(

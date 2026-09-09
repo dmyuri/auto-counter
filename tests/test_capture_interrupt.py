@@ -44,7 +44,7 @@ from tests.test_capture_session import (  # noqa: F401  (fixtures usadas por nom
     ServidorFalso,
     base_url_no_ambiente,
     camera,
-    clipe_legivel,
+    clipes_legiveis,
 )
 
 
@@ -79,24 +79,25 @@ def executa(camera, tmp_path, servidor, relogio, minutos: int, parada=None):
     )
 
 
-def servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos: int):
-    """Servidor que publica um ETag novo a cada 60 s, sem falha nenhuma.
+def servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos: int):
+    """Servidor que publica um clipe novo a cada 60 s, sem falha nenhuma.
 
     É o cenário limpo: qualquer perda que aparecer num teste destes veio do
     encerramento sendo contado como perda, que é exatamente o defeito que
-    AC-003.6 proíbe.
+    AC-003.6 proíbe. Cada minuto publica conteúdo próprio, e não só ETag novo:
+    republicar o mesmo vídeo é recusado desde AC-004.7 e viraria perda.
     """
     publicacoes = [(60.0 * indice, f"clipe-{indice:02d}") for indice in range(minutos)]
     return ServidorFalso(
-        relogio, publicacoes, {etag: clipe_legivel for _, etag in publicacoes}
+        relogio, publicacoes, clipes_legiveis(*[etag for _, etag in publicacoes])
     )
 
 
 def test_AC_003_6_interrupcao_no_minuto_k_faz_a_duracao_real_da_sessao_ser_k(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     # O minuto 7 é aceito em t=360; a parada chega no meio da janela do minuto
     # 8, que só teria clipe novo em t=420. Instante escolhido de propósito longe
     # de qualquer publicação: parada e clipe no mesmo segundo tornariam o
@@ -115,7 +116,7 @@ def test_AC_003_6_interrupcao_no_minuto_k_faz_a_duracao_real_da_sessao_ser_k(
 
 
 def test_AC_003_6_status_e_calculado_sobre_a_duracao_real_e_nao_sobre_a_pedida(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """O caso de `_tasks.md`: pedir 15, parar no 7, sem perda → `COMPLETA`.
 
@@ -123,7 +124,7 @@ def test_AC_003_6_status_e_calculado_sobre_a_duracao_real_e_nao_sobre_a_pedida(
     que daria `INVALIDA`. SUP-013 diz que desistência nunca cai nessa regra.
     """
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     parada = ParadaFalsa(relogio, segundo=380.0)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
@@ -134,7 +135,7 @@ def test_AC_003_6_status_e_calculado_sobre_a_duracao_real_e_nao_sobre_a_pedida(
 
 
 def test_AC_003_6_status_sobre_a_duracao_real_ainda_conta_os_minutos_perdidos(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """Trocar o denominador não é perdoar as perdas reais que houve.
 
@@ -147,7 +148,7 @@ def test_AC_003_6_status_sobre_a_duracao_real_ainda_conta_os_minutos_perdidos(
     servidor = ServidorFalso(
         relogio,
         [(0.0, "clipe-a"), (60.0, "clipe-b"), (200.0, "clipe-c"), (260.0, "clipe-d")],
-        {etag: clipe_legivel for etag in ("clipe-a", "clipe-b", "clipe-c", "clipe-d")},
+        clipes_legiveis("clipe-a", "clipe-b", "clipe-c", "clipe-d"),
     )
     parada = ParadaFalsa(relogio, segundo=230.0)
 
@@ -160,11 +161,11 @@ def test_AC_003_6_status_sobre_a_duracao_real_ainda_conta_os_minutos_perdidos(
 
 
 def test_AC_003_6_encerramento_pelo_usuario_fica_registrado_na_sessao(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """O campo de Q-003, que AC-008.1 e AC-010.4 vão consumir do manifest."""
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     parada = ParadaFalsa(relogio, segundo=200.0)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
@@ -181,7 +182,7 @@ def test_AC_003_6_encerramento_pelo_usuario_fica_registrado_na_sessao(
 
 
 def test_AC_003_6_sessao_sem_encerramento_do_usuario_nao_marca_o_campo(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """O campo só é verdadeiro quando houve ação explícita do usuário.
 
@@ -189,7 +190,7 @@ def test_AC_003_6_sessao_sem_encerramento_do_usuario_nao_marca_o_campo(
     SUP-013 trocaria em toda sessão.
     """
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=3)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=3)
     # A parada existe, mas nunca é pedida dentro do horizonte desta sessão.
     parada = ParadaFalsa(relogio, segundo=10_000.0)
 
@@ -202,7 +203,7 @@ def test_AC_003_6_sessao_sem_encerramento_do_usuario_nao_marca_o_campo(
 
 
 def test_AC_003_6_minutos_ja_capturados_seguem_para_processamento(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """O retorno é sessão normal, não erro: os k minutos continuam utilizáveis.
 
@@ -211,7 +212,7 @@ def test_AC_003_6_minutos_ja_capturados_seguem_para_processamento(
     associados, e o período de AC-003.4 é o dos clipes efetivamente capturados.
     """
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     parada = ParadaFalsa(relogio, segundo=200.0)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
@@ -233,7 +234,7 @@ def test_AC_003_6_minutos_ja_capturados_seguem_para_processamento(
 
 
 def test_AC_003_6_parada_no_meio_da_janela_nao_conta_o_minuto_como_perdido(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """A diferença entre uma sessão `DEGRADADA` falsa e uma `COMPLETA` correta.
 
@@ -242,7 +243,7 @@ def test_AC_003_6_parada_no_meio_da_janela_nao_conta_o_minuto_como_perdido(
     não é perda, e a duração real é 4, não 5.
     """
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     parada = ParadaFalsa(relogio, segundo=200.0)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
@@ -257,7 +258,7 @@ def test_AC_003_6_parada_no_meio_da_janela_nao_conta_o_minuto_como_perdido(
 
 
 def test_AC_003_6_parada_antes_do_primeiro_clipe_produz_sessao_invalida(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """Duração real 0: nenhuma comparação é possível, então `INVALIDA`.
 
@@ -269,7 +270,7 @@ def test_AC_003_6_parada_antes_do_primeiro_clipe_produz_sessao_invalida(
     relogio = RelogioFalso()
     # O servidor nunca publica nada de novo, e a parada chega no instante do
     # comando — antes de qualquer clipe ser aceito.
-    servidor = ServidorFalso(relogio, [(0.0, "clipe-a")], {"clipe-a": clipe_legivel})
+    servidor = ServidorFalso(relogio, [(0.0, "clipe-a")], clipes_legiveis("clipe-a"))
     parada = ParadaFalsa(relogio, segundo=0.0)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
@@ -290,11 +291,11 @@ def test_AC_003_6_parada_antes_do_primeiro_clipe_produz_sessao_invalida(
 
 
 def test_AC_003_6_parada_sem_sinal_nenhum_deixa_a_sessao_ir_ate_o_n_pedido(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     """`parada=None` é o caso do laço sem interface: nada muda em T-07."""
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=3)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=3)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 3, parada=None)
 
@@ -305,7 +306,7 @@ def test_AC_003_6_parada_sem_sinal_nenhum_deixa_a_sessao_ir_ate_o_n_pedido(
 
 @pytest.mark.parametrize("segundo_da_parada", [0.0, 50.0, 200.0, 380.0])
 def test_AC_003_6_nenhuma_parada_deixa_excecao_escapar_para_o_usuario(
-    camera, tmp_path, clipe_legivel, segundo_da_parada
+    camera, tmp_path, clipes_legiveis, segundo_da_parada
 ):
     """A parada em qualquer ponto produz sessão fechada, nunca exceção.
 
@@ -313,7 +314,7 @@ def test_AC_003_6_nenhuma_parada_deixa_excecao_escapar_para_o_usuario(
     em t=0 é justamente a que passa perto do `ValueError` de `classificar`.
     """
     relogio = RelogioFalso()
-    servidor = servidor_de_um_clipe_por_minuto(relogio, clipe_legivel, minutos=15)
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
     parada = ParadaFalsa(relogio, segundo=segundo_da_parada)
 
     resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)

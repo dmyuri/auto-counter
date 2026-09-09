@@ -22,9 +22,11 @@ tempo falso — ele publica um ETag novo em instantes marcados —, que é como 
 URL real se comporta e é o que permite escrever "o ETag ficou parado durante a
 janela" sem contar requisições na mão.
 
-O único vídeo de verdade da suíte é gerado por `cv2.VideoWriter` em diretório
+Os vídeos da suíte são gerados de verdade por `cv2.VideoWriter` em diretório
 temporário, porque o laço passa o clipe baixado por `capture.readable.e_legivel`
-e um dublê ali provaria outra coisa. Nenhuma fixture de vídeo entra no
+e um dublê ali provaria outra coisa. Cada ETag publica um vídeo **de conteúdo
+próprio**: desde AC-004.7 o mesmo arquivo republicado com ETag novo é recusado,
+então reusar os mesmos bytes faria o servidor dublê republicar sem querer. Nenhuma fixture de vídeo entra no
 repositório. Se o codec `mp4v` não existir na máquina, o teste **falha** —
 `audit.py` trata teste pulado igual a teste que falhou.
 """
@@ -95,8 +97,13 @@ class DormirFalso:
         self.relogio.avanca(segundos)
 
 
-def video_valido(caminho: Path) -> bytes:
-    """Bytes de um MP4 curto e legível, escrito com `cv2.VideoWriter`."""
+def video_valido(caminho: Path, semente: int = 0) -> bytes:
+    """Bytes de um MP4 curto e legível, escrito com `cv2.VideoWriter`.
+
+    `semente` muda o conteúdo dos quadros, e com ele os bytes do arquivo: é o
+    que permite publicar clipes distintos, como AC-003.1 exige e AC-004.7
+    passou a conferir pelo conteúdo, e não pelo ETag.
+    """
     escritor = cv2.VideoWriter(
         str(caminho), cv2.VideoWriter_fourcc(*"mp4v"), 30.0, (LARGURA, ALTURA)
     )
@@ -106,7 +113,8 @@ def video_valido(caminho: Path) -> bytes:
     )
     try:
         for indice in range(QUADROS):
-            escritor.write(np.full((ALTURA, LARGURA, 3), indice * 8, dtype=np.uint8))
+            valor = (indice * 8 + semente * 37) % 256
+            escritor.write(np.full((ALTURA, LARGURA, 3), valor, dtype=np.uint8))
     finally:
         escritor.release()
     return caminho.read_bytes()
@@ -189,6 +197,27 @@ def clipe_legivel(tmp_path) -> bytes:
     return video_valido(tmp_path / "fixture-video.mp4")
 
 
+@pytest.fixture
+def clipes_legiveis(tmp_path):
+    """Fábrica de clipes legíveis **distintos**, um por ETag.
+
+    Devolve o dicionário de conteúdo do `ServidorFalso` já com bytes próprios
+    para cada ETag. Publicar o mesmo vídeo em ETags diferentes é, desde
+    AC-004.7, a republicação que o laço recusa — o que provaria outra coisa em
+    todo teste que só quer "um clipe novo a cada minuto".
+    """
+
+    def gerar(*etags: str) -> dict[str, bytes]:
+        return {
+            etag: video_valido(
+                tmp_path / f"fixture-video-{indice:02d}.mp4", semente=indice + 1
+            )
+            for indice, etag in enumerate(etags)
+        }
+
+    return gerar
+
+
 def executa(camera, tmp_path, servidor, relogio, minutos: int):
     """Roda o laço com relógio, espera e transporte HTTP falsos (D-7)."""
     return capturar(
@@ -202,13 +231,13 @@ def executa(camera, tmp_path, servidor, relogio, minutos: int):
 
 
 def test_AC_003_1_captura_sem_falhas_grava_exatamente_n_clipes_distintos_em_disco(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
     servidor = ServidorFalso(
         relogio,
         [(0.0, "clipe-a"), (60.0, "clipe-b"), (120.0, "clipe-c")],
-        {etag: clipe_legivel for etag in ("clipe-a", "clipe-b", "clipe-c")},
+        clipes_legiveis("clipe-a", "clipe-b", "clipe-c"),
     )
 
     resultado = executa(camera, tmp_path, servidor, relogio, minutos=3)
@@ -239,13 +268,13 @@ def test_AC_003_1_captura_sem_falhas_grava_exatamente_n_clipes_distintos_em_disc
 
 
 def test_AC_003_2_etag_repetido_na_janela_nao_baixa_o_conteudo_de_novo(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
     servidor = ServidorFalso(
         relogio,
         [(0.0, "clipe-a"), (60.0, "clipe-b")],
-        {"clipe-a": clipe_legivel, "clipe-b": clipe_legivel},
+        clipes_legiveis("clipe-a", "clipe-b"),
     )
 
     resultado = executa(camera, tmp_path, servidor, relogio, minutos=2)
@@ -298,7 +327,7 @@ def test_AC_004_2_etag_parado_por_toda_a_janela_marca_o_minuto_como_nao_capturad
 
 
 def test_AC_004_2_minuto_perdido_nao_interrompe_a_sessao_e_a_captura_segue(
-    camera, tmp_path, clipe_legivel
+    camera, tmp_path, clipes_legiveis
 ):
     relogio = RelogioFalso()
     # Buraco na publicação: entre t=60 e t=200 o arquivo não é atualizado, e a
@@ -307,7 +336,7 @@ def test_AC_004_2_minuto_perdido_nao_interrompe_a_sessao_e_a_captura_segue(
     servidor = ServidorFalso(
         relogio,
         [(0.0, "clipe-a"), (60.0, "clipe-b"), (200.0, "clipe-c"), (260.0, "clipe-d")],
-        {etag: clipe_legivel for etag in ("clipe-a", "clipe-b", "clipe-c", "clipe-d")},
+        clipes_legiveis("clipe-a", "clipe-b", "clipe-c", "clipe-d"),
     )
 
     resultado = executa(camera, tmp_path, servidor, relogio, minutos=5)
@@ -357,3 +386,186 @@ def test_AC_004_3_clipe_ilegivel_nao_derruba_a_sessao_e_o_minuto_segue_a_janela(
     # A checagem seguiu de 10 em 10 s dentro do que sobrou da janela (SUP-008).
     assert INTERVALO_ENTRE_CHECAGENS == 10.0
     assert relogio.decorrido() == 60.0
+
+
+@pytest.fixture
+def outro_clipe_legivel(tmp_path, clipe_legivel) -> bytes:
+    """Um segundo clipe legível, de conteúdo comprovadamente diferente.
+
+    Os testes de AC-004.7 precisam separar "clipe republicado" de "clipe novo",
+    e para isso os dois vídeos têm de ser legíveis e ter bytes diferentes.
+    """
+    conteudo = video_valido(tmp_path / "fixture-video-alternativo.mp4", semente=7)
+    assert conteudo != clipe_legivel
+    return conteudo
+
+
+def test_AC_004_7_conteudo_igual_ao_do_clipe_anterior_com_etag_novo_nao_abre_minuto(
+    camera, tmp_path, clipe_legivel
+):
+    """AC-004.7: ETag novo com o mesmo vídeo dentro não vira minuto.
+
+    É o caso da sessão `000013-20260908T050407Z`, em que o servidor trocou o
+    Last-Modified sem trocar o arquivo e o mesmo vídeo entrou como minuto 1 e
+    minuto 2. O ETag identifica o recurso, não o conteúdo (SUP-051).
+    """
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (20.0, "clipe-a-republicado")],
+        {"clipe-a": clipe_legivel, "clipe-a-republicado": clipe_legivel},
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=2)
+
+    # O minuto 2 não existe como captura: o clipe repetido não abre minuto.
+    assert [item.minuto for item in resultado.minutos_capturados] == [1]
+    assert [item.minuto for item in resultado.minutos_perdidos] == [2]
+
+    # E o arquivo baixado foi descartado, em vez de ficar no diretório da
+    # sessão fingindo ser material capturado.
+    assert sorted(p.name for p in resultado.dir_sessao.iterdir()) == [
+        NOME_DO_MANIFEST,
+        "minuto-01.mp4",
+    ]
+
+
+def test_AC_004_7_conteudo_repetido_por_toda_a_janela_marca_o_minuto_como_nao_capturado(
+    camera, tmp_path, clipe_legivel, outro_clipe_legivel
+):
+    """AC-004.7: janela inteira sem conteúdo inédito → minuto não capturado.
+
+    Mesma regra de AC-004.2, e como lá a sessão **segue** para o minuto
+    seguinte. O motivo registrado precisa distinguir esta perda das outras:
+    quem ler o manifest depois tem de saber que o servidor republicou o mesmo
+    arquivo, e não que o ETag ficou parado.
+    """
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [
+            (0.0, "clipe-a"),
+            (20.0, "republicado-1"),
+            (50.0, "republicado-2"),
+            (80.0, "republicado-3"),
+            (95.0, "clipe-b"),
+        ],
+        {
+            "clipe-a": clipe_legivel,
+            "republicado-1": clipe_legivel,
+            "republicado-2": clipe_legivel,
+            "republicado-3": clipe_legivel,
+            "clipe-b": outro_clipe_legivel,
+        },
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=3)
+
+    (perdido,) = resultado.minutos_perdidos
+    assert perdido.minuto == 2
+    assert "repetido" in perdido.motivo
+
+    # A sessão não foi interrompida: o minuto 3 foi capturado normalmente,
+    # com o clipe inédito publicado depois.
+    assert [item.minuto for item in resultado.minutos_capturados] == [1, 3]
+    assert [item.etag for item in resultado.minutos_capturados] == [
+        "clipe-a",
+        "clipe-b",
+    ]
+
+
+def test_AC_004_7_conteudo_inedito_depois_do_repetido_dentro_da_janela_e_aceito(
+    camera, tmp_path, clipe_legivel, outro_clipe_legivel
+):
+    """AC-004.7: recusar o repetido não encerra a janela daquele minuto.
+
+    O servidor pode republicar e, em seguida, publicar o clipe de verdade —
+    mesmo caminho que AC-004.3 já usa para o clipe ilegível.
+    """
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (10.0, "republicado"), (40.0, "clipe-b")],
+        {
+            "clipe-a": clipe_legivel,
+            "republicado": clipe_legivel,
+            "clipe-b": outro_clipe_legivel,
+        },
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=2)
+
+    assert resultado.status is StatusDaSessao.COMPLETA
+    assert resultado.minutos_perdidos == ()
+    assert [item.etag for item in resultado.minutos_capturados] == [
+        "clipe-a",
+        "clipe-b",
+    ]
+    assert (resultado.dir_sessao / "minuto-02.mp4").read_bytes() == outro_clipe_legivel
+
+    # O hash de conteúdo de cada minuto ficou gravado (SUP-051), e são
+    # diferentes entre si — é o que sustenta o "clipes distintos" de AC-003.1.
+    gravado = ler(resultado.dir_sessao)
+    hashes = [item.sha256 for item in gravado.minutos_capturados]
+    assert all(hashes)
+    assert len(set(hashes)) == 2
+
+
+def test_AC_004_7_minuto_perdido_por_conteudo_repetido_entra_no_calculo_do_status(
+    camera, tmp_path, clipe_legivel
+):
+    """AC-004.7: a perda por conteúdo repetido conta como minuto perdido.
+
+    Consequência aceita pelo autor do projeto: o minuto realmente não tem vídeo
+    próprio, então entra no denominador de AC-004.5 e AC-004.6 como qualquer
+    outra perda. Aqui é 1 de 2 minutos, ou seja, mais de 20% (SUP-013).
+    """
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (20.0, "clipe-a-republicado")],
+        {"clipe-a": clipe_legivel, "clipe-a-republicado": clipe_legivel},
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=2)
+
+    assert resultado.status is StatusDaSessao.INVALIDA
+    assert [item.minuto for item in resultado.minutos_perdidos] == [2]
+
+    # E a perda ficou registrada em disco, com o motivo (AC-004.5).
+    gravado = ler(resultado.dir_sessao)
+    (perdido,) = gravado.minutos_perdidos
+    assert perdido.minuto == 2
+    assert "repetido" in perdido.motivo
+
+
+def test_AC_003_1_sessao_com_clipe_republicado_grava_apenas_clipes_distintos(
+    camera, tmp_path, clipe_legivel, outro_clipe_legivel
+):
+    """AC-003.1: os clipes em disco são distintos, e não só os ETags.
+
+    Sem AC-004.7 esta sessão gravaria dois arquivos de conteúdo idêntico em
+    minutos diferentes, e `contagem-veiculos` contaria os mesmos veículos duas
+    vezes — o que US-007 existe para evitar e a janela de emenda não pegaria,
+    porque a repetição é do clipe inteiro, não dos 2 s do corte.
+    """
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (10.0, "republicado"), (40.0, "clipe-b")],
+        {
+            "clipe-a": clipe_legivel,
+            "republicado": clipe_legivel,
+            "clipe-b": outro_clipe_legivel,
+        },
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=2)
+
+    videos = sorted(resultado.dir_sessao.glob("*.mp4"))
+    assert [caminho.name for caminho in videos] == [
+        "minuto-01.mp4",
+        "minuto-02.mp4",
+    ]
+    conteudos = [caminho.read_bytes() for caminho in videos]
+    assert len(set(conteudos)) == 2
