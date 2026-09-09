@@ -21,9 +21,6 @@ Sempre que precisar perguntar algo ao usuário:
 - Não escrever critério de aceite não observável.
   Nada de "detecta bem", "rápido o suficiente" ou "robusto" sem número,
   taxa de erro tolerada ou regra de decisão.
-- Não alterar a especificação durante a implementação.
-  Se encontrar contradição entre spec e código (ex.: spec diz uma coisa
-  sobre a linha de contagem e o código faz outra), PARE e avise.
 - Não declarar que a feature está pronta.
   Quem declara é o resultado do test runner e, quando o critério for de
   precisão de contagem, o resultado da validação contra o vídeo de
@@ -57,3 +54,4 @@ Sempre que precisar perguntar algo ao usuário:
 - Toda câmera tem um ID estável e configuração própria (posição da
   linha de contagem). Nunca reaproveitar
   calibração de uma câmera em outra sem isso estar explícito na spec.
+- Se alguma decisão durante a implementação contradiz a spec, pare e me avise.
