@@ -18,9 +18,17 @@ tem 14 emendas. US-007 trata exatamente disso, com uma janela de deduplicação 
 2 s de cada lado do corte.
 
 Orçamento de performance, derivado da decisão de processar 15 min de vídeo em até
-15 min na máquina de referência (notebook 4 núcleos, 8 GB, sem GPU):
+20 min na máquina de referência (notebook 4 núcleos, 8 GB, sem GPU):
 15 min × 60 s × 30 fps ≈ 27.000 frames; amostrando 1 frame a cada 3 restam ~9.000
-frames analisados em 900 s, ou seja, no máximo 100 ms por frame analisado.
+frames analisados em 1.200 s, ou seja, no máximo 133 ms por frame analisado.
+
+O teto começou em 100 ms, derivado de processar 15 min de vídeo em 15 min. A
+medição na máquina de referência deu 117,7 ms por frame (9.000 frames em
+1.059,4 s), e o autor do projeto renegociou o orçamento para 20 min em vez de
+mexer na amostragem: **a captura e o processamento são fases sequenciais, não
+simultâneas**, então o processamento nunca precisou caber no tempo da captura —
+a premissa que produzia os 15 min era mais forte do que o projeto exige. A
+amostragem de SUP-017 fica intocada, e com ela a acurácia de AC-014.3.
 
 ## Histórias
 
@@ -43,7 +51,7 @@ Critérios de aceite:
 
   AC-005.4 — Dado a máquina de referência e a configuração padrão, quando uma
   sessão de 15 minutos já baixada é processada, então o tempo médio por frame
-  analisado é de no máximo 100 ms.
+  analisado é de no máximo 133 ms.
 
 US-006 — Contar cruzamentos da linha com sentido
 Como docente responsável pelo projeto, quero que cada veículo que atravessa a
@@ -121,7 +129,11 @@ Critérios de aceite:
 - [x] SUP-017 — A amostragem padrão é 1 frame a cada 3 (10 fps efetivos),
   configurável. O padrão só é válido se sustentar ao mesmo tempo o orçamento de
   AC-005.4 e a meta de acurácia de AC-014.3 — se conflitarem, quem manda é a
-  acurácia e o orçamento de tempo é renegociado. Afeta AC-005.3 e AC-005.4.
+  acurácia e o orçamento de tempo é renegociado. Foi exatamente o que aconteceu:
+  a medição deu 117,7 ms contra os 100 ms originais, e quem cedeu foi o
+  orçamento, que passou a 133 ms — a amostragem continua 1 a cada 3, e a
+  acurácia de AC-014.3 não foi tocada para caber no tempo. Afeta AC-005.3 e
+  AC-005.4.
 - [x] SUP-018 — O rastreamento usa ByteTrack e o cruzamento usa LineZone, ambos
   da biblioteca supervision, considerando como ponto do veículo o centro da base
   da caixa delimitadora (contato com o solo). Afeta AC-006.1 e AC-006.2.
