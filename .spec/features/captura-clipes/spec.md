@@ -89,6 +89,13 @@ Critérios de aceite:
   captura termina, então a sessão recebe status INVÁLIDA e a lista dos números
   dos minutos perdidos fica registrada.
 
+  AC-004.7 — Dado um clipe baixado cujo conteúdo é byte a byte igual ao do clipe
+  imediatamente anterior aceito na sessão, ainda que o ETag e o Last-Modified
+  sejam diferentes, quando o sistema o valida, então descarta o arquivo, não o
+  associa a nenhum minuto e continua checando dentro da janela daquele minuto;
+  esgotada a janela sem conteúdo inédito, o minuto é marcado como não capturado,
+  pela mesma regra de AC-004.2.
+
 ## Fora de escopo
 
 - Buscar trechos passados: a URL só expõe o último minuto, então não existe
@@ -107,7 +114,10 @@ Critérios de aceite:
   precisam caber nessa janela. Afeta AC-003.2, AC-004.1 e AC-004.2.
 - [x] SUP-009 — A identidade de um clipe é o ETag e sua referência de tempo é o
   Last-Modified do servidor; o relógio local é gravado à parte apenas como
-  informação de diagnóstico. Afeta AC-003.1 e AC-003.4.
+  informação de diagnóstico. A sessão real mostrou que o ETag identifica o
+  **recurso**, não o **conteúdo**: ele pode mudar sem que o vídeo mude, e por
+  isso SUP-051 acrescenta a comparação por conteúdo. A referência de tempo
+  continua sendo o Last-Modified. Afeta AC-003.1 e AC-003.4.
 - [x] SUP-011 — "Vídeo legível" significa que o arquivo abre no OpenCV e que o
   primeiro e o último frame são decodificáveis. Afeta AC-004.3.
 - [x] SUP-012 — Os clipes ficam em `<data_dir>/sessions/<id_sessao>/` e a opção de
@@ -119,6 +129,19 @@ Critérios de aceite:
   comparar aquele número com o de outra sessão. O denominador é N pedido, exceto
   quando o usuário interrompe de propósito, caso em que AC-003.6 substitui N pela
   duração real — desistência nunca cai nesta regra. Afeta AC-004.5 e AC-004.6.
+- [x] SUP-051 — A identidade de **conteúdo** de um clipe é o sha256 dos bytes
+  baixados, comparado apenas com o do clipe imediatamente anterior aceito na
+  sessão. O ETag continua identificando o recurso no servidor (SUP-009), mas
+  deixa de valer como prova de conteúdo inédito: a sessão
+  `000013-20260908T050407Z` recebeu o mesmo vídeo nos minutos 1 e 2 com ETags
+  diferentes (`6a9f969c-69cdbe` e `6a9f96d4-69cdbe`, mesma metade de tamanho),
+  porque o servidor trocou o Last-Modified sem trocar o arquivo. O sha256 de
+  cada clipe aceito passa a ser gravado no registro da sessão, ao lado do ETag e
+  do Last-Modified de AC-003.1 — é campo novo em schema já commitado, então
+  exige **versão nova do manifest**, conforme `CLAUDE.md`. Comparar só com o
+  anterior é decisão do autor do projeto: repetição alternada (o clipe do minuto
+  1 voltando no minuto 3) não é detectada, e isso é consequência aceita. Afeta
+  AC-003.1 e AC-004.7.
 
 ## Perguntas em aberto
 
@@ -140,7 +163,11 @@ Revisado história por história.
 - `contagem-veiculos` — AC-007.4 depende diretamente do registro de minutos
   perdidos criado em AC-004.5 e AC-004.6: sem essa informação a deduplicação de
   emenda seria aplicada entre clipes que não são adjacentes. E AC-003.5 obriga
-  a contagem a terminar antes do descarte dos vídeos.
+  a contagem a terminar antes do descarte dos vídeos. AC-004.7 é o que passa a
+  sustentar o "clipes distintos" de AC-003.1: clipe repetido aceito faria a
+  contagem registrar os mesmos veículos duas vezes, que é exatamente o que
+  US-007 existe para evitar — e a janela de emenda não o impediria, porque a
+  repetição cobre o clipe inteiro, não só os 2 s do corte.
 - `persistencia-resultados` — AC-008.1 grava o status e os minutos perdidos
   definidos em AC-004.4 a AC-004.6 e, por causa de AC-003.6, passa a gravar
   também a duração real da sessão e a marca de encerramento pelo usuário;
