@@ -18,5 +18,5 @@ nome: "Praça Getúlio Vargas"
 sentido_a: "Icaraí"
 sentido_b: "Centro"
 linha:
-  p1: {x: 900, y: 223}
-  p2: {x: 476, y: 258}
+  p1: {x: 1053, y: 348}
+  p2: {x: 351, y: 445}
