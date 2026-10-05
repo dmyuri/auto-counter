@@ -50,7 +50,7 @@ Sempre que precisar perguntar algo ao usuário:
 - O identificador nunca muda depois de criado, mesmo que o texto
   do critério seja reescrito.
 - Todo commit deve seguir o padrão: <tipo>(<escopo>): <descrição>
-	Exemplo: "feat(tracking): adiciona deduplicação na borda do clipe"
+	Exemplo: "feat(tracking): adiciona deduplicação na borda do clipe" (sempre uma mensagem curta)
 - Toda câmera tem um ID estável e configuração própria (posição da
   linha de contagem). Nunca reaproveitar
   calibração de uma câmera em outra sem isso estar explícito na spec.
