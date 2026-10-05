@@ -25,6 +25,7 @@ código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 import os
 import signal
 import time
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -68,6 +69,10 @@ from auto_counter.counting.session import (
     SessaoSemClipes,
     processar_sessao,
 )
+from auto_counter.storage.connection import caminho_do_banco
+from auto_counter.storage.connection import conectar as conectar_ao_banco
+from auto_counter.storage.persist import persistir_sessao
+from auto_counter.storage.sessions import PersistenciaDaCaptura, listar_sessoes
 
 VARIAVEL_DATA_DIR = "AUTO_COUNTER_DATA_DIR"
 """Variável de ambiente com o diretório de dados das sessões."""
@@ -360,17 +365,43 @@ def capturar_sessao(
         # segue sem a parada por sinal, que é gancho de conveniência do CLI.
         anterior = None
 
+    data_dir = _data_dir()
+
     try:
-        with _cliente_http() as cliente:
+        with ExitStack() as pilha:
+            cliente = pilha.enter_context(_cliente_http())
+
+            # Falha ao abrir o banco não interrompe a captura (`CLAUDE.md`):
+            # 15 minutos perdidos não se recuperam, e o manifest continua
+            # sendo prova durável suficiente até o processamento regravar a
+            # sessão (D-7 de `persistencia-resultados/_tasks.md`).
+            conexao = None
+            try:
+                conexao = pilha.enter_context(conectar_ao_banco(data_dir))
+            except Exception as falha_do_banco:  # noqa: BLE001
+                typer.echo(
+                    f"aviso: não foi possível abrir o banco em {data_dir}: "
+                    f"{falha_do_banco}; a sessão será capturada sem "
+                    f"persistência no banco",
+                    err=True,
+                )
+
+            persistencia = (
+                None
+                if conexao is None
+                else PersistenciaDaCaptura(conexao, camera=escolhida)
+            )
+
             resultado = capturar(
                 escolhida,
                 duracao,
-                data_dir=_data_dir(),
+                data_dir=data_dir,
                 cliente=cliente,
                 agora=_agora,
                 dormir=_dormir,
                 parada=parada,
                 manter_videos=keep_clips,
+                persistencia=persistencia,
             )
     except BaseUrlAusenteError as falha:
         raise _erro(str(falha)) from falha
@@ -527,7 +558,28 @@ def processar_sessao_capturada(
 
     _imprime_contagem(resultado, escolhida, config)
 
-    # D-5: só aqui, com o processamento terminado, os vídeos podem ir embora.
+    # D-3 de `persistencia-resultados/_tasks.md`: a persistência acontece
+    # ANTES do descarte dos vídeos. Falha aqui aborta o comando e preserva os
+    # clipes — invertido, uma falha de banco deixaria a sessão sem vídeo e
+    # sem resultado, e o banco é a única coisa que sobrevive ao fim da sessão.
+    try:
+        with conectar_ao_banco(data_dir) as conexao:
+            resumo = persistir_sessao(conexao, dir_sessao, camera=escolhida)
+    except Exception as falha:  # noqa: BLE001 — nenhuma falha de banco crua
+        raise _erro(
+            f"não foi possível persistir a sessão no banco: {falha}; os "
+            f"vídeos não foram apagados e esta sessão pode ser reprocessada"
+        ) from falha
+
+    typer.echo(f"Banco:             {caminho_do_banco(data_dir)}")
+    typer.echo(
+        f"Persistido:        {resumo.eventos_gravados} evento(s), "
+        f"{resumo.minutos_capturados} minuto(s) com dado, "
+        f"{resumo.minutos_sem_dado} minuto(s) sem dado"
+    )
+
+    # D-5: só aqui, com o processamento e a persistência terminados, os
+    # vídeos podem ir embora.
     if manifest.manter_videos:
         typer.echo("Clipes:            preservados (manter_videos na sessão)")
     else:
@@ -535,6 +587,54 @@ def processar_sessao_capturada(
         typer.echo(
             f"Clipes:            {apagados} arquivo(s) de vídeo apagado(s); "
             "esta sessão não pode mais ser reprocessada"
+        )
+
+
+@session_app.command("list")
+def listar_sessoes_capturadas(
+    limit: int | None = typer.Option(
+        None,
+        "--limit",
+        help="Limita a quantidade de sessões listadas. Padrão: todas (SUP-029).",
+    ),
+) -> None:
+    """Lista o histórico de sessões, da mais recente para a mais antiga.
+
+    Lê apenas o banco (US-009): não toca em vídeo nem em rede, e por isso uma
+    sessão cujos clipes já foram apagados continua aparecendo (AC-009.1).
+
+    Nenhuma câmera é resolvida pelo registro — o id da câmera já está gravado
+    na linha de cada sessão.
+    """
+    data_dir = _data_dir()
+    caminho = caminho_do_banco(data_dir)
+
+    # O banco é criado na primeira conexão (SUP-024); uma listagem não deve
+    # ter o efeito colateral de criar um banco vazio sozinha. Sem arquivo
+    # ainda, o histórico é vazio por definição, sem precisar conectar.
+    if not caminho.is_file():
+        typer.echo(
+            f"Nenhuma sessão foi gravada ainda. O banco seria criado em "
+            f"{caminho}."
+        )
+        return
+
+    try:
+        with conectar_ao_banco(data_dir) as conexao:
+            sessoes = listar_sessoes(conexao, limite=limit)
+    except Exception as falha:  # noqa: BLE001 — nenhuma falha de banco crua
+        raise _erro(f"não foi possível consultar o histórico: {falha}") from falha
+
+    if not sessoes:
+        typer.echo(f"Nenhuma sessão foi gravada ainda no banco em {caminho}.")
+        return
+
+    for item in sessoes:
+        status_texto = "—" if item.status is None else item.status.value
+        periodo = f"{item.inicio or '—'} .. {item.fim or '—'}"
+        typer.echo(
+            f"{item.id_sessao}  {item.id_camera}  {periodo}  {status_texto}  "
+            f"{item.total_de_eventos} veículo(s)"
         )
 
 

@@ -37,6 +37,11 @@ from auto_counter.counting.model import (
     NOME_DO_ARQUIVO_DO_MODELO,
     SUBDIRETORIO_DE_MODELOS,
 )
+from auto_counter.storage.connection import conectar
+from auto_counter.storage.events import contar_eventos
+from auto_counter.storage.minutes import ler_agregados
+from auto_counter.storage.model import EstadoDoMinuto
+from auto_counter.storage.sessions import ler_sessao
 
 FIXTURES = Path(__file__).parent / "fixtures" / "cameras"
 
@@ -135,14 +140,21 @@ def monta_sessao(
     `corrompidos` são minutos cujo `.mp4` existe mas não abre — o ramo de clipe
     ilegível de D-4, que é como esta suíte faz o processamento falhar sem
     apagar arquivo nenhum de propósito.
+
+    `duracao_real` é gravada junto do `status`, replicando o invariante real
+    de `manifest.fechar()` (`captura-clipes`): uma sessão real nunca tem
+    status sem duração real. Sem isso, `persistencia-resultados` (T-07)
+    recusaria a sessão como "ainda em captura" (D-4 daquela feature).
     """
+    duracao_pedida = max(minutos, default=0)
     dir_sessao = data_dir / "sessions" / ID_SESSAO
     dir_sessao.mkdir(parents=True, exist_ok=True)
     manifest = ManifestDaSessao(
         dir_sessao,
         id_sessao=ID_SESSAO,
         id_camera=ID_CAMERA,
-        duracao_pedida=max(minutos, default=0),
+        duracao_pedida=duracao_pedida,
+        duracao_real=duracao_pedida,
         status=StatusDaSessao.COMPLETA,
         manter_videos=manter_videos,
     )
@@ -255,3 +267,95 @@ def test_session_process_em_sessao_inexistente_erra_citando_o_caminho(
     assert ID_SESSAO in resultado.output
     assert "manifest.json" in resultado.output
     assert "Traceback" not in resultado.output
+
+
+# --- Ligação com `persistencia-resultados` (T-08 daquela feature) ---------
+
+
+def test_AC_008_1_session_process_grava_a_sessao_no_banco(
+    runner, registro, data_dir, modelo, detector
+):
+    """A sessão processada fica gravada no banco, não só no `eventos.json`."""
+    monta_sessao(data_dir)
+
+    resultado = processa(runner, registro)
+    assert resultado.exit_code == 0, resultado.output
+
+    with conectar(data_dir) as conexao:
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao is not None
+    assert sessao.id_camera == ID_CAMERA
+    assert sessao.duracao_pedida == 2
+    assert sessao.duracao_real == 2
+    assert sessao.status is StatusDaSessao.COMPLETA
+    assert sessao.versao_do_modelo is not None
+    assert sessao.amostragem is not None
+    assert sessao.limiar_de_confianca is not None
+
+
+def test_AC_008_2_session_process_grava_os_eventos_no_banco(
+    runner, registro, data_dir, modelo, detector
+):
+    """Os eventos da contagem ficam ligados ao id da sessão no banco.
+
+    O detector dublê não produz cruzamento nenhum (cena vazia, D-8) — a
+    correção da contagem é provada em `contagem-veiculos`, não aqui. O que
+    esta ligação prova é que a escrita acontece e que a contagem gravada no
+    banco é exatamente a que o comando reportou, inclusive quando é zero.
+    """
+    monta_sessao(data_dir)
+
+    resultado = processa(runner, registro)
+    assert resultado.exit_code == 0, resultado.output
+
+    with conectar(data_dir) as conexao:
+        total_no_banco = contar_eventos(conexao, ID_SESSAO)
+        agregados = ler_agregados(conexao, ID_SESSAO)
+
+    assert "Total de eventos:  0" in resultado.output
+    assert total_no_banco == 0
+    # E a grade de minutos também subiu — AC-008.3/AC-008.4, pela mesma
+    # chamada de `persistir_sessao`.
+    assert len(agregados) == 2
+    assert all(item.estado is EstadoDoMinuto.CAPTURADO for item in agregados)
+
+
+def test_AC_008_5_rodar_session_process_duas_vezes_nao_duplica_nada(
+    runner, registro, data_dir, modelo, detector
+):
+    """`--keep-clips` equivalente (`manter_videos` no manifest) permite rodar
+    `session process` duas vezes na mesma sessão: a segunda não duplica."""
+    monta_sessao(data_dir, manter_videos=True)
+
+    primeira = processa(runner, registro)
+    assert primeira.exit_code == 0, primeira.output
+    segunda = processa(runner, registro)
+    assert segunda.exit_code == 0, segunda.output
+
+    with conectar(data_dir) as conexao:
+        assert contar_eventos(conexao, ID_SESSAO) == 0
+        assert len(ler_agregados(conexao, ID_SESSAO)) == 2
+
+
+def test_falha_ao_persistir_nao_apaga_os_videos_da_sessao(
+    runner, registro, data_dir, modelo, detector, monkeypatch
+):
+    """Falha de banco aborta o comando **antes** do descarte dos vídeos
+    (D-3): a sessão continua reprocessável depois que a causa for corrigida.
+    """
+    dir_sessao = monta_sessao(data_dir)
+
+    def _persistir_com_falha(*args, **kwargs):
+        raise RuntimeError("falha simulada de banco")
+
+    monkeypatch.setattr("auto_counter.cli.persistir_sessao", _persistir_com_falha)
+
+    resultado = processa(runner, registro)
+
+    assert resultado.exit_code == 1
+    assert "Traceback" not in resultado.output
+    assert "banco" in resultado.output
+    assert "reprocessada" in resultado.output
+    # Nenhum clipe foi apagado: a falha aconteceu antes do descarte (D-3).
+    assert videos(dir_sessao) == ["minuto-01.mp4", "minuto-02.mp4"]

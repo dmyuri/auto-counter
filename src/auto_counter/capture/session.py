@@ -100,6 +100,48 @@ class Parada(Protocol):
     def foi_pedida(self) -> bool: ...
 
 
+class Persistencia(Protocol):
+    """O gancho de persistência da sessão no banco de
+    `persistencia-resultados` (D-1 e D-2 do `_tasks.md` daquela feature).
+
+    Modelado como objeto vindo de fora, pelo mesmo motivo de `Parada`: este
+    módulo **não importa `sqlite3` nem o pacote `storage`** — se importasse,
+    toda a suíte de `captura-clipes` passaria a depender de banco. Parâmetro
+    opcional de `capturar()`; o padrão (`None`) não observa nada (D-2).
+
+    `sessao_aberta` é chamada logo depois de o manifest ser criado — antes de
+    qualquer minuto ser resolvido —, e é o que faz o registro de sessão
+    existir desde o início da captura (D-1), pré-condição de AC-012.4 de
+    `interface-sessao`. `captura_fechada` é chamada logo depois de
+    `manifest.fechar(...)`, com o mesmo desfecho que o manifest acabou de
+    gravar.
+
+    A implementação concreta decide o que fazer com uma falha de gravação —
+    este protocolo não assume nada sobre isso.
+    """
+
+    def sessao_aberta(
+        self,
+        *,
+        id_sessao: str,
+        id_camera: str,
+        duracao_pedida: int,
+        relogio_do_comando: datetime,
+    ) -> None: ...
+
+    def captura_fechada(
+        self,
+        *,
+        id_sessao: str,
+        inicio: datetime | None,
+        fim: datetime | None,
+        duracao_real: int,
+        encerrada_pelo_usuario: bool,
+        status: StatusDaSessao,
+        minutos_perdidos: tuple[int, ...],
+    ) -> None: ...
+
+
 @dataclass(frozen=True)
 class ResultadoDaSessao:
     """O desfecho da sessão, já classificado e já gravado no manifest.
@@ -299,6 +341,7 @@ def capturar(
     dormir: Callable[[float], None],
     parada: Parada | None = None,
     manter_videos: bool = False,
+    persistencia: Persistencia | None = None,
 ) -> ResultadoDaSessao:
     """Captura N minutos de clipes da câmera e devolve o desfecho da sessão.
 
@@ -327,6 +370,10 @@ def capturar(
     (SUP-012): ela só é **gravada** no manifest aqui. A captura nunca apaga
     vídeo — quem descarta é o encerramento da sessão, depois que
     `contagem-veiculos` terminar (T-09, AC-007.4).
+
+    `persistencia` é o gancho opcional de `persistencia-resultados` (D-1 e D-2):
+    `None` (o padrão) não observa nada, e esta função nunca importa banco por
+    conta própria.
     """
     duracao_pedida = validar_duracao(minutos)
     url = url_do_clipe(camera)
@@ -341,6 +388,17 @@ def capturar(
         duracao_pedida=duracao_pedida,
         manter_videos=manter_videos,
     )
+
+    if persistencia is not None:
+        # Momento 1 de D-1: a linha de sessão nasce antes de qualquer minuto
+        # ser resolvido — é o que torna o registro existente desde o início
+        # da captura (AC-012.4 de `interface-sessao`).
+        persistencia.sessao_aberta(
+            id_sessao=id_sessao,
+            id_camera=camera.id,
+            duracao_pedida=duracao_pedida,
+            relogio_do_comando=relogio_do_comando,
+        )
 
     etags_ja_aceitos: set[str] = set()
     # O hash do último clipe aceito é o lado esquerdo da comparação de
@@ -398,6 +456,18 @@ def capturar(
         duracao_real=duracao_real,
         encerrada_pelo_usuario=encerrada_pelo_usuario,
     )
+
+    if persistencia is not None:
+        # Momento 2 de D-1: o mesmo desfecho que o manifest acabou de gravar.
+        persistencia.captura_fechada(
+            id_sessao=id_sessao,
+            inicio=manifest.inicio,
+            fim=manifest.fim,
+            duracao_real=duracao_real,
+            encerrada_pelo_usuario=encerrada_pelo_usuario,
+            status=resultado.status,
+            minutos_perdidos=tuple(minutos_perdidos),
+        )
 
     return ResultadoDaSessao(
         id_sessao=id_sessao,

@@ -35,6 +35,8 @@ from auto_counter.cameras.url import VARIAVEL_BASE_URL
 from auto_counter.capture.manifest import ler
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.cli import app
+from auto_counter.storage.connection import conectar
+from auto_counter.storage.sessions import ler_sessao
 from tests.test_capture_session import (  # noqa: F401  (dublês reusados de T-07)
     BASE_URL,
     DormirFalso,
@@ -281,3 +283,43 @@ def test_AC_003_6_ctrl_c_encerra_a_sessao_pela_regra_de_duracao_real(
     assert gravado.id_sessao in resultado.output
     assert "COMPLETA" in resultado.output
     assert str(sessao) in resultado.output
+
+
+def test_session_capture_grava_a_linha_da_sessao_no_banco(
+    runner, registro, monkeypatch, tmp_path, clipes_legiveis
+):
+    """Ligação com `persistencia-resultados` (T-04 daquela feature): o
+    comando `session capture` abre a linha da sessão no banco, não só no
+    manifest."""
+    relogio = RelogioFalso()
+    liga_o_servidor(
+        monkeypatch,
+        servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 1),
+        relogio,
+    )
+
+    resultado = runner.invoke(
+        app,
+        [
+            "session",
+            "capture",
+            "000013",
+            "--minutes",
+            "1",
+            "--config-dir",
+            str(registro),
+        ],
+    )
+
+    assert resultado.exit_code == 0, resultado.output
+    sessao = dir_da_sessao(tmp_path)
+    gravado = ler(sessao)
+
+    with conectar(tmp_path / "data") as conexao:
+        sessao_no_banco = ler_sessao(conexao, gravado.id_sessao)
+
+    assert sessao_no_banco is not None
+    assert sessao_no_banco.id_camera == "000013"
+    assert sessao_no_banco.duracao_pedida == 1
+    assert sessao_no_banco.duracao_real == 1
+    assert sessao_no_banco.status is StatusDaSessao.COMPLETA
