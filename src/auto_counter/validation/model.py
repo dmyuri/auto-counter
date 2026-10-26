@@ -53,3 +53,32 @@ class VeiculoManual:
     categoria: Categoria
     sentido: str
 
+
+@dataclass(frozen=True)
+class VeiculoAutomatico:
+    """Um evento gravado, levado para a referência temporal do clipe.
+
+    `instante_s` é o deslocamento inteiro, em segundos, desde o Last-Modified
+    do clipe (resolução de 1 s: AC-006.5 trunca o timestamp).
+    """
+
+    instante_s: Decimal
+    categoria: Categoria
+    sentido: str
+    id_de_rastreio: str
+
+
+@dataclass(frozen=True)
+class Par:
+    """Um veículo manual casado com um automático. `delta_s` = automático − manual."""
+
+    manual: VeiculoManual
+    automatico: VeiculoAutomatico
+    delta_s: Decimal
+
+
+@dataclass(frozen=True)
+class Pareamento:
+    pares: tuple[Par, ...]
+    manuais_sem_par: tuple[VeiculoManual, ...]
+    automaticos_sem_par: tuple[VeiculoAutomatico, ...]
