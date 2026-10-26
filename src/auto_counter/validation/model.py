@@ -132,3 +132,42 @@ class MedicaoDoClipe:
     acerto: AcertoDeCategoria
     matriz: MatrizDeConfusao
     pareamento: Pareamento
+
+
+@dataclass(frozen=True)
+class Violacao:
+    """Um limite da meta violado por um clipe (AC-014.4).
+
+    `valor` é a fração medida, ou `None` quando a métrica é indefinida (D-2).
+    `numerador` e `denominador` são os números brutos: no erro de contagem,
+    |automático − manual| e manual; no acerto, acertos e pares. Em erro
+    indefinido (manual 0), `numerador` é o total automático.
+    """
+
+    condicao: Condicao
+    metrica: str
+    sentido: str | None
+    valor: Fraction | None
+    numerador: int
+    denominador: int
+    limite: int
+
+
+@dataclass(frozen=True)
+class VereditoDoClipe:
+    condicao: Condicao
+    passou: bool
+    violacoes: tuple[Violacao, ...]
+
+
+@dataclass(frozen=True)
+class VereditoDoConjunto:
+    """Veredito da meta. `violacoes` e `ausentes` só consideram condições
+    obrigatórias; a chuva fica em `clipes` para o relatório, sem peso no
+    veredito (Q-008).
+    """
+
+    passou: bool
+    clipes: tuple[VereditoDoClipe, ...]
+    violacoes: tuple[Violacao, ...]
+    ausentes: tuple[Condicao, ...]
