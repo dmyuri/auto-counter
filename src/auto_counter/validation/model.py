@@ -7,7 +7,8 @@ from enum import Enum
 from fractions import Fraction
 from pathlib import Path
 
-from auto_counter.counting.config import Categoria
+from auto_counter.cameras.model import Camera
+from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
 
 
 class Condicao(Enum):
@@ -180,3 +181,47 @@ class ContagemAutomatica:
     veiculos: tuple[VeiculoAutomatico, ...]
     id_sessao: str
     sha256_do_video: str
+
+
+@dataclass(frozen=True)
+class ClipeMedido:
+    """Um clipe de referência no resultado: medido, ou "não medido" com motivo.
+
+    "Não medido" só é possível para a chuva (D-3, D-10): clipe obrigatório sem
+    medição interrompe a validação antes de chegar aqui.
+    """
+
+    clipe: ClipeDeReferencia
+    camera: Camera
+    sha256_video: str | None
+    sha256_csv: str | None
+    medicao: MedicaoDoClipe | None
+    veredito: VereditoDoClipe | None
+    motivo_nao_medido: str | None
+
+    def __post_init__(self) -> None:
+        if self.medicao is None:
+            if self.clipe.condicao.obrigatoria:
+                raise ValueError(
+                    f"o clipe obrigatório {self.clipe.condicao.value!r} não pode "
+                    f"ficar sem medição; só a chuva pode ser não medida"
+                )
+            if not self.motivo_nao_medido:
+                raise ValueError(
+                    f"o clipe {self.clipe.condicao.value!r} sem medição precisa "
+                    f"de um motivo"
+                )
+        elif self.veredito is None:
+            raise ValueError(
+                f"o clipe {self.clipe.condicao.value!r} medido precisa de veredito"
+            )
+
+
+@dataclass(frozen=True)
+class ResultadoDaValidacao:
+    """Tudo o que uma execução da validação produziu, na ordem do enum."""
+
+    clipes: tuple[ClipeMedido, ...]
+    veredito: VereditoDoConjunto
+    versao_do_modelo: str
+    configuracao: ConfiguracaoDoProcessamento
