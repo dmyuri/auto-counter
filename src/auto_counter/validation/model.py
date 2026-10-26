@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from decimal import Decimal
 from enum import Enum
+from fractions import Fraction
 from pathlib import Path
 
 from auto_counter.counting.config import Categoria
@@ -82,3 +83,52 @@ class Pareamento:
     pares: tuple[Par, ...]
     manuais_sem_par: tuple[VeiculoManual, ...]
     automaticos_sem_par: tuple[VeiculoAutomatico, ...]
+
+
+@dataclass(frozen=True)
+class ErroDoSentido:
+    """Totais e erro de contagem de um sentido (AC-014.1).
+
+    `erro` é a fração exata |automático − manual| / manual. `None` significa
+    indefinido: manual 0 com automático > 0 (D-2).
+    """
+
+    sentido: str
+    manual: int
+    automatico: int
+    erro: Fraction | None
+
+
+@dataclass(frozen=True)
+class AcertoDeCategoria:
+    """Acerto de categoria sobre os pares do clipe (AC-014.2).
+
+    `fracao` é `None` quando não há nenhum par (D-2).
+    """
+
+    pares: int
+    acertos: int
+    fracao: Fraction | None
+
+
+@dataclass(frozen=True)
+class MatrizDeConfusao:
+    """Contagem por (categoria manual, categoria automática).
+
+    Sempre 4x4, na ordem de `Categoria`: `linhas[i][j]` é o número de pares
+    com a i-ésima categoria no manual e a j-ésima no automático.
+    """
+
+    linhas: tuple[tuple[int, ...], ...]
+
+    def contagem(self, manual: Categoria, automatica: Categoria) -> int:
+        categorias = list(Categoria)
+        return self.linhas[categorias.index(manual)][categorias.index(automatica)]
+
+
+@dataclass(frozen=True)
+class MedicaoDoClipe:
+    erros: tuple[ErroDoSentido, ...]
+    acerto: AcertoDeCategoria
+    matriz: MatrizDeConfusao
+    pareamento: Pareamento
