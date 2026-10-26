@@ -12,6 +12,7 @@ from datetime import datetime
 from enum import Enum
 
 from auto_counter.capture.status import StatusDaSessao
+from auto_counter.counting.config import Categoria
 
 
 class EstadoDoMinuto(Enum):
@@ -92,3 +93,20 @@ class SessaoNoHistorico:
     fim: datetime | None
     status: StatusDaSessao | None
     total_de_eventos: int
+
+
+@dataclass(frozen=True)
+class EventoGravado:
+    """Uma linha da tabela `evento`, como `ler_eventos` devolve.
+
+    Não reaproveita `counting.events.Evento`: ele exige `indice_do_frame` e
+    `posicao_na_linha`, que o schema não guarda, e inventar esses valores
+    seria mentir sobre o evento lido.
+    """
+
+    id_de_rastreio: str
+    sentido: str
+    timestamp: datetime
+    categoria: Categoria
+    confianca: float
+    minuto: int

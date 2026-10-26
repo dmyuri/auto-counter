@@ -16,8 +16,13 @@ como tudo-ou-nada.
 import sqlite3
 from collections.abc import Iterable
 
+from auto_counter.counting.config import Categoria
 from auto_counter.counting.events import Evento
-from auto_counter.storage.sessions import SessaoInexistenteError
+from auto_counter.storage.model import EventoGravado
+from auto_counter.storage.sessions import (
+    SessaoInexistenteError,
+    _desserializa_instante,
+)
 
 
 def gravar_eventos(
@@ -82,3 +87,43 @@ def contar_eventos(conexao: sqlite3.Connection, id_sessao: str) -> int:
         (id_sessao,),
     ).fetchone()
     return linha["contagem"]
+
+
+def ler_eventos(
+    conexao: sqlite3.Connection, id_sessao: str
+) -> tuple[EventoGravado, ...]:
+    """Lê os eventos gravados de uma sessão, em ordem determinística.
+
+    `SELECT` puro, ordenado por `timestamp, id_de_rastreio, sentido` para que
+    duas leituras do mesmo banco devolvam a mesma sequência. O timestamp volta
+    para UTC ciente de fuso pelo mesmo caminho de `ler_sessao`.
+
+    Sessão inexistente é `SessaoInexistenteError`; sessão existente sem evento
+    é tupla vazia. As duas situações são diferentes e não se confundem.
+    """
+    existe = conexao.execute(
+        "SELECT 1 FROM sessao WHERE id_sessao = ?", (id_sessao,)
+    ).fetchone()
+    if existe is None:
+        raise SessaoInexistenteError(id_sessao)
+
+    linhas = conexao.execute(
+        """
+        SELECT id_de_rastreio, sentido, timestamp, categoria, confianca, minuto
+        FROM evento
+        WHERE id_sessao = ?
+        ORDER BY timestamp, id_de_rastreio, sentido
+        """,
+        (id_sessao,),
+    ).fetchall()
+    return tuple(
+        EventoGravado(
+            id_de_rastreio=linha["id_de_rastreio"],
+            sentido=linha["sentido"],
+            timestamp=_desserializa_instante(linha["timestamp"]),
+            categoria=Categoria(linha["categoria"]),
+            confianca=linha["confianca"],
+            minuto=linha["minuto"],
+        )
+        for linha in linhas
+    )

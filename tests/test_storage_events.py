@@ -17,7 +17,8 @@ import pytest
 from auto_counter.counting.config import Categoria
 from auto_counter.counting.events import Evento
 from auto_counter.storage.connection import conectar
-from auto_counter.storage.events import contar_eventos, gravar_eventos
+from auto_counter.storage.events import contar_eventos, gravar_eventos, ler_eventos
+from auto_counter.storage.model import EventoGravado
 from auto_counter.storage.sessions import SessaoInexistenteError, abrir_sessao
 
 ID_CAMERA = "000013"
@@ -169,3 +170,80 @@ def test_contar_eventos_de_sessao_sem_nenhum_evento_e_zero(tmp_path):
     with conectar(tmp_path) as conexao:
         _abrir(conexao, "s1")
         assert contar_eventos(conexao, "s1") == 0
+
+
+def test_ler_eventos_devolve_o_que_foi_gravado_com_fuso_e_categoria_do_enum(tmp_path):
+    instante = datetime(2026, 1, 1, 8, 0, 30, tzinfo=timezone.utc)
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, "s1")
+        gravar_eventos(
+            conexao,
+            "s1",
+            [
+                _evento(
+                    id_de_rastreio="1:7",
+                    sentido="Centro",
+                    categoria=Categoria.ONIBUS,
+                    confianca=0.75,
+                    minuto=3,
+                    timestamp=instante,
+                )
+            ],
+        )
+        conexao.commit()
+
+        lidos = ler_eventos(conexao, "s1")
+
+    assert lidos == (
+        EventoGravado(
+            id_de_rastreio="1:7",
+            sentido="Centro",
+            timestamp=instante,
+            categoria=Categoria.ONIBUS,
+            confianca=0.75,
+            minuto=3,
+        ),
+    )
+    assert lidos[0].timestamp.utcoffset() == timedelta(0)
+    assert isinstance(lidos[0].categoria, Categoria)
+
+
+def test_ler_eventos_vem_em_ordem_de_timestamp_e_rastreio(tmp_path):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, "s1")
+        gravar_eventos(
+            conexao,
+            "s1",
+            [
+                _evento(id_de_rastreio="1:9", timestamp=base + timedelta(seconds=30)),
+                _evento(id_de_rastreio="1:3", sentido="Centro", timestamp=base + timedelta(seconds=10)),
+                _evento(id_de_rastreio="1:2", sentido="Icaraí", timestamp=base + timedelta(seconds=10)),
+                _evento(id_de_rastreio="1:2", sentido="Centro", timestamp=base + timedelta(seconds=10)),
+            ],
+        )
+        conexao.commit()
+
+        lidos = ler_eventos(conexao, "s1")
+
+    assert [(e.id_de_rastreio, e.sentido) for e in lidos] == [
+        ("1:2", "Centro"),
+        ("1:2", "Icaraí"),
+        ("1:3", "Centro"),
+        ("1:9", "Icaraí"),
+    ]
+
+
+def test_ler_eventos_de_sessao_inexistente_erra_citando_o_id(tmp_path):
+    with conectar(tmp_path) as conexao:
+        with pytest.raises(SessaoInexistenteError) as erro:
+            ler_eventos(conexao, "nao-existe")
+
+    assert "nao-existe" in str(erro.value)
+
+
+def test_ler_eventos_de_sessao_sem_evento_devolve_tupla_vazia(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, "s1")
+
+        assert ler_eventos(conexao, "s1") == ()
