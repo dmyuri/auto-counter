@@ -171,3 +171,12 @@ class VereditoDoConjunto:
     clipes: tuple[VereditoDoClipe, ...]
     violacoes: tuple[Violacao, ...]
     ausentes: tuple[Condicao, ...]
+
+
+@dataclass(frozen=True)
+class ContagemAutomatica:
+    """A contagem automática de um clipe de referência, lida do banco (D-4)."""
+
+    veiculos: tuple[VeiculoAutomatico, ...]
+    id_sessao: str
+    sha256_do_video: str
