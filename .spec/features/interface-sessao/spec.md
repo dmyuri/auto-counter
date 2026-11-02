@@ -64,6 +64,15 @@ Critérios de aceite:
   e nenhum minuto foi perdido por causa do fechamento; o encerramento antecipado
   só acontece por ação explícita do usuário.
 
+  AC-012.5 — Dado uma sessão em processamento, quando o usuário a encerra
+  explicitamente, então a contagem para, nenhum resultado de contagem é gravado,
+  os vídeos da sessão permanecem em disco para reprocessamento e a interface
+  informa que o processamento foi cancelado, sem oferecer download.
+
+  AC-012.6 — Dado uma sessão encerrada em que nenhum clipe pôde ser processado,
+  quando o usuário acessa o resultado, então a interface exibe o status da sessão
+  e informa que não há planilha, sem oferecer download.
+
 US-013 — Uma sessão por vez
 Como integrante do projeto de extensão, quero que o sistema recuse iniciar uma
 segunda sessão enquanto outra roda, para não disputar CPU e rede e acabar com as
@@ -102,6 +111,9 @@ Critérios de aceite:
   com o uso monousuário em máquina local. Afeta AC-013.1.
 - [x] SUP-043 — A duração é oferecida como valor inteiro em minutos, com padrão
   de 15. Afeta AC-011.2.
+- [x] SUP-052 — A trava de sessão única vale para todo comando que baixa ou
+  processa vídeo: `session run`, `session capture` e `session process`. Afeta
+  AC-013.1 e AC-013.2.
 
 ## Perguntas em aberto
 
@@ -113,6 +125,15 @@ Nenhuma pendente. Os IDs permanecem como histórico das decisões.
   só então vale a regra de AC-003.6 de `captura-clipes`. A alternativa —
   encerrar ao fechar — deixaria um fechamento acidental custar minutos de captura
   que a URL não permite recuperar.
+- [x] Q-009 — Uma sessão sem nenhum clipe processável tem planilha?
+  **Respondida: não.** A D-6 de `exportacao-xlsx` continua valendo, e a interface
+  exibe o status e informa que não há planilha, o que virou AC-012.6.
+- [x] Q-010 — Encerrar explicitamente vale também no processamento?
+  **Respondida: sim.** A contagem para, nada é gravado e os vídeos ficam para
+  reprocessamento, o que virou AC-012.5. A alternativa de descartar os vídeos
+  deixaria a sessão sem como ser refeita.
+- [x] Q-011 — A trava de sessão única vale para quais comandos? **Respondida:
+  todo comando que baixa ou processa vídeo**, o que virou SUP-052.
 
 ## Specs afetadas
 
@@ -128,9 +149,12 @@ Revisado história por história.
   interrupção, e só a ação explícita aciona a sessão de duração real.
 - `contagem-veiculos` — AC-012.2 expõe a segunda fase, cujo tempo é limitado por
   AC-005.4; se o orçamento de performance for renegociado por SUP-017, a espera
-  que a interface anuncia muda junto.
+  que a interface anuncia muda junto. AC-012.5 exige que o processamento possa
+  ser interrompido entre dois minutos sem gravar resultado.
 - `persistencia-resultados` — AC-012.3 mostra o status gravado em AC-008.1, e
   AC-012.4 depende de esse registro existir desde o início da captura.
 - `exportacao-xlsx` — AC-012.3 entrega o arquivo produzido por AC-010.1. Como
   Q-005 manteve a geração de planilha para sessão INVÁLIDA, aquele critério não
-  precisa de caminho alternativo para sessão concluída sem planilha.
+  precisa de caminho alternativo para sessão com clipes processados. A sessão
+  sem nenhum clipe processável segue sem planilha pela D-6 daquela feature, e
+  AC-012.6 define o que a interface mostra nesse caso.

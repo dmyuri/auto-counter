@@ -183,3 +183,7 @@ Revisado história por história.
 - `validacao-acuracia` — AC-014.1 e AC-014.2 medem a saída desta feature, e o
   pareamento de AC-014.2 assume os campos de AC-006.1. AC-006.6 muda os números
   comparados lá: sem ela, o clipe de pico tenderia a estourar a meta de 10%.
+- `interface-sessao` — AC-012.2 expõe a segunda fase, cujo tempo é limitado por
+  AC-005.4; se o orçamento de performance for renegociado por SUP-017, a espera
+  que a interface anuncia muda junto. AC-012.5 exige que o processamento possa
+  ser interrompido entre dois minutos sem gravar resultado.
