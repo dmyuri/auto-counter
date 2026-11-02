@@ -75,6 +75,9 @@ def test_o_modulo_export_nao_importa_captura_contagem_nem_rede():
         "auto_counter.counting.clip",
         "auto_counter.cameras.registry",
     )
+    # O vocabulário de status é o mesmo no banco, na interface e no XLSX
+    # (captura-clipes): importar o enum não traz captura nenhuma junto.
+    PERMITIDO = "auto_counter.capture.status"
     encontrados = []
     for arquivo in Path(auto_counter.export.__file__).parent.glob("*.py"):
         for no in ast.walk(ast.parse(arquivo.read_text(encoding="utf-8"))):
@@ -87,7 +90,8 @@ def test_o_modulo_export_nao_importa_captura_contagem_nem_rede():
             encontrados += [
                 (arquivo.name, nome)
                 for nome in nomes
-                if any(nome == p or nome.startswith(p + ".") for p in proibidos)
+                if nome != PERMITIDO
+                and any(nome == p or nome.startswith(p + ".") for p in proibidos)
             ]
 
     assert encontrados == []
