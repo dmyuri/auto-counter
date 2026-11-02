@@ -29,11 +29,18 @@ que mantém a promessa de D-4 acima.
 
 Esta função **não** apaga vídeo: o descarte é de T-13 (D-5), depois que o
 processamento termina com sucesso.
+
+Para `interface-sessao`, o processamento é observável e interrompível:
+`ao_resolver_minuto` informa o progresso (AC-012.2) e `parada` é consultada
+antes de cada clipe (AC-012.5). Pedida a parada, a função levanta
+`ProcessamentoCancelado`; o `eventos.json` parcial que já tenha sido gravado
+fica onde está, e quem decide o que fazer com ele é o chamador.
 """
 
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Protocol
 
 from auto_counter.cameras.model import Camera
 from auto_counter.capture import manifest as manifest_da_captura
@@ -64,6 +71,24 @@ class SessaoSemClipes(RuntimeError):
     Erro explícito, e não resultado vazio: é o que separa "passou zero veículo"
     de "não havia vídeo nenhum para olhar".
     """
+
+
+class ProcessamentoCancelado(RuntimeError):
+    """O usuário encerrou a sessão durante o processamento (AC-012.5).
+
+    Erro explícito, e não resultado parcial: o que foi contado até aqui não é a
+    contagem da sessão e não pode ser lido como se fosse.
+    """
+
+
+class ParadaDoProcessamento(Protocol):
+    """Qualquer objeto que diga se o usuário pediu para encerrar.
+
+    Declarado aqui, e não importado de `capture.session`, para que o
+    processamento não passe a depender de `httpx`.
+    """
+
+    def foi_pedida(self) -> bool: ...
 
 
 @dataclass(frozen=True)
@@ -102,6 +127,8 @@ def processar_sessao(
     config: ConfiguracaoDoProcessamento,
     versao_do_modelo: str,
     fabrica_de_bytetrack: Callable[[], RastreadorDoSupervision] = criar_bytetrack,
+    parada: ParadaDoProcessamento | None = None,
+    ao_resolver_minuto: Callable[[int], None] | None = None,
 ) -> ResultadoDaContagem:
     """Processa todos os clipes de uma sessão e grava o `eventos.json` (D-1).
 
@@ -112,6 +139,11 @@ def processar_sessao(
 
     `versao_do_modelo` vem de fora porque quem conhece o `.onnx` é a CLI (T-13):
     este módulo grava a versão usada (AC-008.1), não a descobre.
+
+    `parada` é consultada **antes de cada clipe** (AC-012.5): pedida, levanta
+    `ProcessamentoCancelado` sem abrir o clipe seguinte. `ao_resolver_minuto`
+    recebe o número de cada minuto capturado depois de resolvido, processado ou
+    não processado (AC-012.2). Sem os dois, nada muda.
     """
     dir_sessao = Path(dir_sessao)
     manifest = manifest_da_captura.ler(dir_sessao)
@@ -150,6 +182,11 @@ def processar_sessao(
 
     for capturado in sorted(manifest.minutos_capturados, key=lambda item: item.minuto):
         minuto = capturado.minuto
+        if parada is not None and parada.foi_pedida():
+            raise ProcessamentoCancelado(
+                f"o processamento da sessão {manifest.id_sessao} foi cancelado "
+                f"a pedido do usuário antes do minuto {minuto}"
+            )
         resultado = processar_clipe(
             dir_sessao / capturado.arquivo,
             camera=camera,
@@ -165,6 +202,8 @@ def processar_sessao(
                 MinutoNaoProcessado(minuto=minuto, motivo=resultado.motivo)
             )
             anterior = None
+            if ao_resolver_minuto is not None:
+                ao_resolver_minuto(minuto)
             continue
 
         if anterior is None:
@@ -185,6 +224,8 @@ def processar_sessao(
         processados.append(minuto)
         anterior = (minuto, resultado)
         caminho = grava()
+        if ao_resolver_minuto is not None:
+            ao_resolver_minuto(minuto)
 
     if caminho is None:
         raise SessaoSemClipes(

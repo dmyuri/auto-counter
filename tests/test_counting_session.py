@@ -42,7 +42,11 @@ from auto_counter.capture.status import StatusDaSessao
 from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
 from auto_counter.counting.events import NOME_DO_ARQUIVO_DE_EVENTOS
 from auto_counter.counting.events import ler as ler_eventos
-from auto_counter.counting.session import SessaoSemClipes, processar_sessao
+from auto_counter.counting.session import (
+    ProcessamentoCancelado,
+    SessaoSemClipes,
+    processar_sessao,
+)
 
 LARGURA = 128
 ALTURA = 48
@@ -191,7 +195,7 @@ def monta_sessao(
     return dir_sessao
 
 
-def processa(dir_sessao: Path, detector: DetectorDuble):
+def processa(dir_sessao: Path, detector: DetectorDuble, **extra):
     """Roda `processar_sessao` com os dublês e a configuração do teste."""
     return processar_sessao(
         dir_sessao,
@@ -200,6 +204,7 @@ def processa(dir_sessao: Path, detector: DetectorDuble):
         config=ConfiguracaoDoProcessamento(amostragem=AMOSTRAGEM),
         versao_do_modelo=VERSAO_DO_MODELO,
         fabrica_de_bytetrack=lambda: ByteTrackDuble(),
+        **extra,
     )
 
 
@@ -359,3 +364,107 @@ def test_sessao_sem_nenhum_clipe_em_disco_falha_com_erro_explicito(tmp_path):
         processa(dir_sessao, detector)
 
     assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+
+
+class ParadaDuble:
+    """A parada de AC-012.5, ligada à mão pelo teste."""
+
+    def __init__(self) -> None:
+        self.pedida = False
+
+    def foi_pedida(self) -> bool:
+        return self.pedida
+
+
+def test_AC_012_2_o_gancho_recebe_cada_minuto_capturado_resolvido(tmp_path):
+    """Processado ou não, todo minuto capturado é resolvido e informado.
+
+    O minuto 2 tem o clipe ausente (D-4) e é resolvido como não processado; o
+    minuto 3, perdido na captura, nunca virou clipe e não é anunciado.
+    """
+    dir_sessao = monta_sessao(
+        tmp_path,
+        minutos_capturados=(1, 2, 4),
+        minutos_perdidos=(3,),
+        minutos_sem_arquivo=(2,),
+        status=StatusDaSessao.DEGRADADA,
+    )
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+    )
+    resolvidos: list[int] = []
+
+    processa(dir_sessao, detector, ao_resolver_minuto=resolvidos.append)
+
+    assert resolvidos == [1, 2, 4]
+
+
+def test_AC_012_5_parada_pedida_levanta_processamento_cancelado_antes_do_proximo_clipe(
+    tmp_path,
+):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2, 3))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CAMINHAO)
+    )
+    parada = ParadaDuble()
+
+    def ao_resolver(minuto: int) -> None:
+        if minuto == 1:
+            parada.pedida = True
+
+    with pytest.raises(ProcessamentoCancelado) as cancelamento:
+        processa(
+            dir_sessao, detector, parada=parada, ao_resolver_minuto=ao_resolver
+        )
+
+    # Dois frames analisados por clipe: só o clipe do minuto 1 chegou ao detector.
+    assert detector.chamadas == 2
+    assert ID_SESSAO in str(cancelamento.value)
+
+
+def test_AC_012_5_parada_pedida_antes_do_primeiro_clipe_nao_grava_eventos(tmp_path):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA))
+    parada = ParadaDuble()
+    parada.pedida = True
+
+    with pytest.raises(ProcessamentoCancelado):
+        processa(dir_sessao, detector, parada=parada)
+
+    assert detector.chamadas == 0
+    assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+
+
+def test_parada_nunca_pedida_nao_altera_o_processamento(tmp_path):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+
+    resultado = processa(dir_sessao, detector, parada=ParadaDuble())
+
+    assert resultado.minutos_processados == (1, 2)
+    assert len(resultado.eventos) == 2
+
+
+def test_o_modulo_de_contagem_nao_importa_httpx():
+    import ast
+
+    import auto_counter.counting.session as modulo
+
+    arvore = ast.parse(Path(modulo.__file__).read_text(encoding="utf-8"))
+    importados = set()
+    for no in ast.walk(arvore):
+        if isinstance(no, ast.Import):
+            importados.update(alias.name.split(".")[0] for alias in no.names)
+        elif isinstance(no, ast.ImportFrom) and no.module:
+            importados.add(no.module.split(".")[0])
+            if no.module == "auto_counter.capture":
+                importados.update(alias.name for alias in no.names)
+
+    assert "httpx" not in importados
+    assert "session" not in importados  # `capture.session` traria o `httpx`
