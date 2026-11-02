@@ -26,7 +26,6 @@ Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 """
 
-import os
 import signal
 import time
 from contextlib import ExitStack
@@ -80,6 +79,11 @@ from auto_counter.export import (
     exportar_sessao,
 )
 from auto_counter.export.format import linha_de_aviso
+from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
+    DATA_DIR_PADRAO,
+    VARIAVEL_DATA_DIR,
+    data_dir_do_ambiente,
+)
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.connection import conectar as conectar_ao_banco
 from auto_counter.storage.persist import persistir_sessao
@@ -88,18 +92,6 @@ from auto_counter.storage.sessions import (
     ler_sessao,
     listar_sessoes,
 )
-
-VARIAVEL_DATA_DIR = "AUTO_COUNTER_DATA_DIR"
-"""Variável de ambiente com o diretório de dados das sessões."""
-
-DATA_DIR_PADRAO = Path("data")
-"""Diretório de dados usado quando a variável não está definida.
-
-Não é segredo nem endereço de rede — é só onde os artefatos locais caem — e o
-`.gitignore` já cobre `data/`, então nada gerado aqui escapa para o
-repositório. A proibição de valor padrão embutido de AC-001.5 é sobre a base
-URL, que continua vindo exclusivamente do ambiente.
-"""
 
 SUBDIRETORIO_DE_PREVIEWS = "previews"
 """Onde o PNG cai dentro do diretório de dados quando `--out` é omitido."""
@@ -176,8 +168,7 @@ def _carrega(config_dir: Path) -> Registro:
 
 def _data_dir() -> Path:
     """Diretório de dados: `AUTO_COUNTER_DATA_DIR`, ou o padrão local."""
-    valor = (os.environ.get(VARIAVEL_DATA_DIR) or "").strip()
-    return Path(valor) if valor else DATA_DIR_PADRAO
+    return data_dir_do_ambiente()
 
 
 def _caminho_padrao_do_preview(id_camera: str) -> Path:
