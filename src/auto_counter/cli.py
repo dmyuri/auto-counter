@@ -22,10 +22,12 @@ De `.spec/features/exportacao-xlsx/spec.md`: AC-010.1 (o comando `session
 export` gera o XLSX no diretório de dados), AC-010.5 (sessão INVÁLIDA também
 gera planilha, com o aviso) e AC-010.7 (a exportação lê apenas do banco).
 
-De `.spec/features/interface-sessao/spec.md`: AC-013.1 e AC-013.2 (a trava de
-sessão única recusa a segunda sessão, citando a câmera e o horário da que está
-em curso, e ignora a trava órfã) e SUP-052 (a trava vale para `session capture`
-e `session process`; `session list` e `session export` ficam livres).
+De `.spec/features/interface-sessao/spec.md`: AC-011.4 (o comando `session run`
+roda o pipeline completo até o XLSX sem iniciar a interface web), AC-013.1 e
+AC-013.2 (a trava de sessão única recusa a segunda sessão, citando a câmera e o
+horário da que está em curso, e ignora a trava órfã) e SUP-052 (a trava vale
+para `session run`, `session capture` e `session process`; `session list` e
+`session export` ficam livres).
 
 Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
@@ -61,7 +63,7 @@ from auto_counter.capture.duration import (
 )
 from auto_counter.capture.manifest import NOME_DO_MANIFEST, diretorio_da_sessao
 from auto_counter.capture.manifest import ler as ler_manifest
-from auto_counter.capture.session import ResultadoDaSessao, capturar
+from auto_counter.capture.session import Parada, ResultadoDaSessao, capturar
 from auto_counter.counting import model as modelo_de_deteccao
 from auto_counter.counting.clip import DetectorDoClipe
 from auto_counter.counting.config import ConfiguracaoDoProcessamento
@@ -88,6 +90,9 @@ from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
     data_dir_do_ambiente,
 )
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError, adquirir_trava
+from auto_counter.pipeline.run import executar_sessao
+from auto_counter.pipeline.state import Fase
+from auto_counter.pipeline.stop import ParadaComposta, ParadaPorArquivo
 from auto_counter.pipeline.processing import (
     PersistenciaFalhouError,
     conferir_modelo,
@@ -455,6 +460,136 @@ def capturar_sessao(
             signal.signal(signal.SIGINT, anterior)
 
     _imprime_resultado(resultado)
+
+
+class _ParadaPorSinal:
+    """O Ctrl+C como parada explícita, **uma por fase** do `session run`.
+
+    A cada `nova()` instala um tratador de SIGINT e devolve uma parada nova,
+    composta com o pedido por arquivo da interface. O primeiro Ctrl+C de cada
+    fase é o encerramento explícito (AC-003.6 na captura, AC-012.5 no
+    processamento); o tratador se desinstala nessa hora, então o segundo da
+    mesma fase aborta de verdade, como em `session capture`.
+    """
+
+    def __init__(self, data_dir: Path) -> None:
+        self._data_dir = data_dir
+        self._original = None
+        self._instalado = False
+
+    def nova(self) -> Parada:
+        sinal = ParadaPorCtrlC()
+
+        def ao_receber_sigint(numero, quadro) -> None:  # pragma: no cover - via sinal
+            self._desinstalar()
+            sinal.pedir()
+            typer.echo("")
+            typer.echo("Encerrando a sessão a pedido do usuário...")
+
+        try:
+            if self._original is None:
+                self._original = signal.getsignal(signal.SIGINT)
+            signal.signal(signal.SIGINT, ao_receber_sigint)
+            self._instalado = True
+        except ValueError:
+            # Fora da thread principal não há como instalar tratador; a parada
+            # por arquivo continua valendo.
+            pass
+        return ParadaComposta(sinal, ParadaPorArquivo(self._data_dir))
+
+    def _desinstalar(self) -> None:
+        if self._instalado and self._original is not None:
+            signal.signal(signal.SIGINT, self._original)
+        self._instalado = False
+
+    def restaurar(self) -> None:
+        self._desinstalar()
+
+
+@session_app.command("run")
+def executar_sessao_completa(
+    id_camera: str = typer.Argument(
+        ..., metavar="ID", help="Id da câmera, como no registro (ex.: 000013)."
+    ),
+    minutes: int = typer.Option(
+        ...,
+        "--minutes",
+        help=f"Duração da captura, de {DURACAO_MINIMA} a {DURACAO_MAXIMA} minutos.",
+    ),
+    keep_clips: bool = typer.Option(
+        False,
+        "--keep-clips",
+        help="Preserva os clipes no diretório da sessão. Desligado por padrão.",
+    ),
+    config_dir: Path = OPCAO_CONFIG_DIR,
+) -> None:
+    """Captura, processa e exporta uma sessão, da câmera ao XLSX (AC-011.4).
+
+    É o mesmo comando que a interface dispara em segundo plano. Usa os padrões
+    de processamento (sem `--threshold` nem `--sample-rate`) e não inicia a
+    interface web. A ordem é a de `session capture`: a duração é validada antes
+    de resolver a câmera, e a trava de sessão única é pega antes de qualquer
+    requisição (AC-013.1).
+
+    Ctrl+C na captura encerra a sessão pela regra da duração real, e os minutos
+    já capturados seguem para o processamento (AC-003.6). Ctrl+C no
+    processamento o cancela: nada é gravado e os vídeos ficam para
+    `session process` (AC-012.5).
+    """
+    try:
+        duracao = validar_duracao(minutes)
+    except DuracaoForaDoIntervaloError as falha:
+        raise _erro(str(falha)) from falha
+
+    registro = _carrega(config_dir)
+    escolhida = _camera_do_registro(registro, id_camera, config_dir)
+    data_dir = _data_dir()
+    sinal = _ParadaPorSinal(data_dir)
+
+    try:
+        with _trava(data_dir, "run", escolhida), ExitStack() as pilha:
+            estado = executar_sessao(
+                escolhida,
+                duracao,
+                data_dir=data_dir,
+                cliente=pilha.enter_context(_cliente_http()),
+                agora=_agora,
+                dormir=_dormir,
+                criar_detector=lambda caminho, config: _detector(caminho, config),
+                criar_parada=sinal.nova,
+                manter_videos=keep_clips,
+            )
+    except OutraSessaoEmAndamentoError as falha:
+        raise _erro(str(falha)) from falha
+    except KeyboardInterrupt as falha:
+        raise _erro(
+            "sessão abortada pelo usuário; os minutos já registrados estão no "
+            "manifest da sessão"
+        ) from falha
+    except typer.Exit:
+        raise
+    except Exception as falha:  # noqa: BLE001 — nenhuma falha crua chega ao usuário
+        raise _erro(str(falha) or type(falha).__name__) from falha
+    finally:
+        sinal.restaurar()
+
+    typer.echo(f"Sessão:            {estado.id_sessao}")
+    if estado.status is not None:
+        typer.echo(f"Status:            {estado.status}")
+
+    if estado.fase is Fase.CONCLUIDA:
+        typer.echo(f"Planilha:          {estado.planilha}")
+        with conectar_ao_banco(data_dir) as conexao:
+            aviso = linha_de_aviso(ler_sessao(conexao, estado.id_sessao))
+        if aviso is not None:
+            typer.echo(aviso)
+        return
+
+    if estado.fase is Fase.PROCESSAMENTO_CANCELADO:
+        typer.echo(estado.mensagem)
+        return
+
+    raise _erro(estado.mensagem or "a sessão terminou sem planilha")
 
 
 def _configuracao(threshold: float | None, sample_rate: int | None):
