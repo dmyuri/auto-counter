@@ -7,8 +7,9 @@ SUP-033 (timestamp como data e hora reais do Excel, em horário de Brasília).
 
 from openpyxl.worksheet.worksheet import Worksheet
 
-from auto_counter.export.format import linha_de_aviso, para_brasilia
+from auto_counter.export.format import para_brasilia
 from auto_counter.export.load import DadosDaExportacao
+from auto_counter.export.sheet_common import escrever_cabecalho
 
 FORMATO_DATA_HORA = "dd/mm/yyyy hh:mm:ss"
 
@@ -23,14 +24,7 @@ CABECALHO = (
 
 def escrever_eventos(planilha: Worksheet, dados: DadosDaExportacao) -> None:
     """Escreve o aviso (se houver), o cabeçalho e uma linha por evento."""
-    linha = 1
-    aviso = linha_de_aviso(dados.sessao)
-    if aviso is not None:
-        planilha.cell(row=linha, column=1, value=aviso)
-        linha += 1
-
-    for coluna, titulo in enumerate(CABECALHO, start=1):
-        planilha.cell(row=linha, column=coluna, value=titulo)
+    linha = escrever_cabecalho(planilha, dados.sessao, CABECALHO)
 
     for evento in dados.eventos:
         linha += 1
