@@ -92,9 +92,13 @@ def abrir_sessao(
     duracao_pedida: int,
     sentido_a: str,
     sentido_b: str,
+    nome_camera: str | None = None,
     comitar: bool = True,
 ) -> None:
     """Momento 1 de D-1: abre a linha no início da captura.
+
+    `nome_camera` é opcional (migration 002, AC-010.4): o nome vigente na
+    sessão, gravado como os rótulos de sentido.
 
     `status`, `inicio`, `fim`, `duracao_real`, `versao_do_modelo`,
     `amostragem` e `limiar_de_confianca` ficam nulos — eles só existem a
@@ -112,8 +116,8 @@ def abrir_sessao(
         """
         INSERT INTO sessao
             (id_sessao, id_camera, criada_em, duracao_pedida,
-             sentido_a, sentido_b)
-        VALUES (?, ?, ?, ?, ?, ?)
+             sentido_a, sentido_b, nome_camera)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id_sessao) DO NOTHING
         """,
         (
@@ -123,6 +127,7 @@ def abrir_sessao(
             duracao_pedida,
             sentido_a,
             sentido_b,
+            nome_camera,
         ),
     )
     if comitar:
@@ -230,6 +235,7 @@ def ler_sessao(conexao: sqlite3.Connection, id_sessao: str) -> SessaoGravada | N
     return SessaoGravada(
         id_sessao=linha["id_sessao"],
         id_camera=linha["id_camera"],
+        nome_camera=linha["nome_camera"],
         criada_em=_desserializa_instante(linha["criada_em"]),
         inicio=_desserializa_instante(linha["inicio"]),
         fim=_desserializa_instante(linha["fim"]),

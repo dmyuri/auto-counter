@@ -63,6 +63,7 @@ class SessaoGravada:
 
     id_sessao: str
     id_camera: str
+    nome_camera: str | None
     criada_em: datetime
     inicio: datetime | None
     fim: datetime | None

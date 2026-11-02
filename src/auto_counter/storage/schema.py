@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 
 MIGRATIONS: dict[int, str] = {
     1: "001_inicial.sql",
+    2: "002_nome_camera.sql",
 }
 """Versão → nome do arquivo em `storage/migrations/`. Só cresce no fim."""
 

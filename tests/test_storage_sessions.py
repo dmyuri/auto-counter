@@ -130,6 +130,24 @@ def test_AC_008_1_a_sessao_persistida_registra_modelo_amostragem_e_limiar(tmp_pa
     assert sessao.limiar_de_confianca == 0.35
 
 
+def test_AC_010_4_abrir_sessao_grava_o_nome_da_camera(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, nome_camera="Av. Roberto Silveira")
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.nome_camera == "Av. Roberto Silveira"
+
+
+def test_abrir_sessao_sem_nome_da_camera_continua_funcionando(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao)
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.nome_camera is None
+
+
 def test_a_sessao_recem_aberta_tem_status_nulo_e_nao_um_quarto_status(tmp_path):
     """Status nulo = ainda em captura (momento 1 de D-1), não um quarto
     valor do vocabulário fechado de `StatusDaSessao`."""

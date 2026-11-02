@@ -19,7 +19,9 @@ import sqlite3
 
 import pytest
 
+from auto_counter.storage import schema
 from auto_counter.storage.connection import conectar
+from auto_counter.storage.schema import MIGRATIONS, VERSAO_ATUAL
 
 ID_CAMERA = "000013"
 CRIADA_EM = "2026-01-01T00:00:00+00:00"
@@ -58,7 +60,7 @@ def test_a_primeira_conexao_aplica_a_migration_001_e_grava_a_versao(tmp_path):
             "SELECT versao, aplicada_em FROM schema_version"
         ).fetchall()
 
-    assert [linha["versao"] for linha in linhas] == [1]
+    assert [linha["versao"] for linha in linhas] == sorted(MIGRATIONS)
     assert linhas[0]["aplicada_em"]  # não vazio: é o instante real da aplicação
 
 
@@ -72,7 +74,38 @@ def test_aplicar_migrations_duas_vezes_nao_reaplica_nem_duplica_versao(tmp_path)
             "SELECT versao FROM schema_version"
         ).fetchall()
 
-    assert [linha["versao"] for linha in linhas] == [1]
+    assert [linha["versao"] for linha in linhas] == sorted(MIGRATIONS)
+
+
+def test_um_banco_novo_chega_a_versao_2(tmp_path):
+    with conectar(tmp_path) as conexao:
+        versao = conexao.execute("SELECT MAX(versao) AS v FROM schema_version").fetchone()
+
+    assert versao["v"] == 2
+    assert VERSAO_ATUAL == 2
+
+
+def test_banco_na_versao_1_sobe_para_a_2_sem_perder_as_sessoes_gravadas(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr(schema, "MIGRATIONS", {1: MIGRATIONS[1]})
+    with conectar(tmp_path) as conexao:
+        _inserir_sessao(conexao, "antiga")
+        conexao.commit()
+
+    monkeypatch.undo()
+    with conectar(tmp_path) as conexao:
+        versoes = [
+            linha["versao"]
+            for linha in conexao.execute("SELECT versao FROM schema_version")
+        ]
+        sessao = conexao.execute(
+            "SELECT id_camera, nome_camera FROM sessao WHERE id_sessao = 'antiga'"
+        ).fetchone()
+
+    assert versoes == [1, 2]
+    assert sessao["id_camera"] == ID_CAMERA
+    assert sessao["nome_camera"] is None
 
 
 def test_as_tres_tabelas_existem_depois_da_migration(tmp_path):
