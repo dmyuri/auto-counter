@@ -54,7 +54,6 @@ from auto_counter.capture.duration import (
     DuracaoForaDoIntervaloError,
     validar_duracao,
 )
-from auto_counter.capture.cleanup import descartar_videos
 from auto_counter.capture.manifest import NOME_DO_MANIFEST, diretorio_da_sessao
 from auto_counter.capture.manifest import ler as ler_manifest
 from auto_counter.capture.session import ResultadoDaSessao, capturar
@@ -70,7 +69,6 @@ from auto_counter.counting.model import (
 from auto_counter.counting.session import (
     ResultadoDaContagem,
     SessaoSemClipes,
-    processar_sessao,
 )
 from auto_counter.export import (
     SessaoEmAndamentoError,
@@ -83,6 +81,12 @@ from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
     DATA_DIR_PADRAO,
     VARIAVEL_DATA_DIR,
     data_dir_do_ambiente,
+)
+from auto_counter.pipeline.processing import (
+    PersistenciaFalhouError,
+    conferir_modelo,
+    persistir_e_descartar,
+    processar,
 )
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.connection import conectar as conectar_ao_banco
@@ -541,16 +545,15 @@ def processar_sessao_capturada(
 
     # O modelo é conferido **antes** de abrir qualquer vídeo: descobrir que ele
     # falta depois de minutos de processamento seria desperdício puro.
-    caminho_do_onnx = caminho_do_modelo(data_dir)
     try:
-        versao = modelo_de_deteccao.versao_do_modelo(caminho_do_onnx)
+        caminho_do_onnx, versao = conferir_modelo(data_dir)
     except ModeloAusenteError as falha:
         raise _erro(str(falha)) from falha
     except OSError as falha:
         raise _erro(str(falha)) from falha
 
     try:
-        resultado = processar_sessao(
+        resultado = processar(
             dir_sessao,
             camera=escolhida,
             detector=_detector(caminho_do_onnx, config),
@@ -569,30 +572,35 @@ def processar_sessao_capturada(
     # clipes — invertido, uma falha de banco deixaria a sessão sem vídeo e
     # sem resultado, e o banco é a única coisa que sobrevive ao fim da sessão.
     try:
-        with conectar_ao_banco(data_dir) as conexao:
-            resumo = persistir_sessao(conexao, dir_sessao, camera=escolhida)
-    except Exception as falha:  # noqa: BLE001 — nenhuma falha de banco crua
+        persistido = persistir_e_descartar(
+            data_dir,
+            dir_sessao,
+            camera=escolhida,
+            manter_videos=manifest.manter_videos,
+            persistir=persistir_sessao,
+        )
+    except PersistenciaFalhouError as falha:
         raise _erro(
             f"não foi possível persistir a sessão no banco: {falha}; os "
             f"vídeos não foram apagados e esta sessão pode ser reprocessada"
         ) from falha
 
-    typer.echo(f"Banco:             {caminho_do_banco(data_dir)}")
+    resumo = persistido.resumo
+    typer.echo(f"Banco:             {persistido.banco}")
     typer.echo(
         f"Persistido:        {resumo.eventos_gravados} evento(s), "
         f"{resumo.minutos_capturados} minuto(s) com dado, "
         f"{resumo.minutos_sem_dado} minuto(s) sem dado"
     )
 
-    # D-5: só aqui, com o processamento e a persistência terminados, os
-    # vídeos podem ir embora.
-    if manifest.manter_videos:
+    # D-5: só depois do processamento e da persistência os vídeos vão embora
+    # (a ordem é garantida por `persistir_e_descartar`).
+    if persistido.videos_apagados is None:
         typer.echo("Clipes:            preservados (manter_videos na sessão)")
     else:
-        apagados = descartar_videos(dir_sessao)
         typer.echo(
-            f"Clipes:            {apagados} arquivo(s) de vídeo apagado(s); "
-            "esta sessão não pode mais ser reprocessada"
+            f"Clipes:            {persistido.videos_apagados} arquivo(s) de "
+            "vídeo apagado(s); esta sessão não pode mais ser reprocessada"
         )
 
 
