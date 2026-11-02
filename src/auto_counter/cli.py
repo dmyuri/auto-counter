@@ -29,11 +29,16 @@ horário da que está em curso, e ignora a trava órfã) e SUP-052 (a trava vale
 para `session run`, `session capture` e `session process`; `session list` e
 `session export` ficam livres).
 
+De `.spec/features/interface-sessao/spec.md`: SUP-041 (o comando `ui` abre a
+interface apenas em localhost, sem autenticação).
+
 Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 """
 
 import signal
+import subprocess
+import sys
 import time
 from contextlib import ExitStack
 from datetime import datetime, timezone
@@ -43,6 +48,7 @@ import httpx
 import typer
 from dotenv import load_dotenv
 
+from auto_counter import ui as pacote_da_interface
 from auto_counter.cameras.frame import FrameIndisponivelError, primeiro_frame
 from auto_counter.cameras.geometry import LinhaForaDoFrameError
 from auto_counter.cameras.model import Camera
@@ -216,6 +222,15 @@ def _agora() -> datetime:
 def _dormir(segundos: float) -> None:
     """Espera de verdade entre as checagens, injetada no laço (D-7)."""
     time.sleep(segundos)
+
+
+def _executar_ui(comando: list[str]) -> int:
+    """Executa o servidor da interface e devolve o código de saída dele.
+
+    Atributo de módulo de propósito, como `_cliente_http` e `_agora`: o teste
+    troca este nome, e nenhum teste sobe o Streamlit de verdade.
+    """
+    return subprocess.call(comando)
 
 
 def _trava(data_dir: Path, comando: str, camera_: Camera):
@@ -590,6 +605,45 @@ def executar_sessao_completa(
         return
 
     raise _erro(estado.mensagem or "a sessão terminou sem planilha")
+
+
+@app.command("ui")
+def abrir_interface(
+    port: int = typer.Option(8501, "--port", help="Porta local da interface."),
+    config_dir: Path = OPCAO_CONFIG_DIR,
+) -> None:
+    """Abre a interface local da sessão no navegador (SUP-041).
+
+    Escuta apenas em 127.0.0.1 e sem autenticação: o sistema é monousuário e roda
+    na máquina de quem o usa. Fechar o navegador não encerra uma sessão em
+    andamento, e este comando não pega a trava de sessão única — quem pega é a
+    sessão, que roda num processo à parte.
+    """
+    script = Path(pacote_da_interface.__file__).parent / "app.py"
+    comando = [
+        sys.executable,
+        "-m",
+        "streamlit",
+        "run",
+        str(script),
+        "--server.address",
+        "127.0.0.1",
+        "--server.port",
+        str(port),
+        "--browser.gatherUsageStats",
+        "false",
+        "--",
+        "--config-dir",
+        str(config_dir.resolve()),
+    ]
+    try:
+        codigo = _executar_ui(comando)
+    except KeyboardInterrupt:
+        return
+    except OSError as falha:
+        raise _erro(f"não foi possível iniciar a interface: {falha}") from falha
+    if codigo != 0:
+        raise typer.Exit(code=codigo)
 
 
 def _configuracao(threshold: float | None, sample_rate: int | None):
