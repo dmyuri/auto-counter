@@ -55,6 +55,23 @@ uv run auto-counter --help
 uv run auto-counter ui
 ```
 
+### Gerar a planilha de uma sessão
+
+O fluxo completo, pela linha de comando, tem três passos:
+
+```powershell
+# 1. Captura (1 a 15 minutos)
+uv run auto-counter session capture 000013 --minutes 3
+
+# 2. Processamento: conta os veículos e grava o resultado no banco
+uv run auto-counter session process <ID_SESSAO>
+
+# 3. Exportação para XLSX
+uv run auto-counter session export <ID_SESSAO>
+```
+
+`uv run auto-counter session list` mostra as sessões gravadas e seus ids. O arquivo é gravado no diretório de dados (`AUTO_COUNTER_DATA_DIR`) com o nome `<id_camera>_<AAAAMMDD>_<HHMM>_<N>min.xlsx`, e recebe o sufixo do status quando a sessão não é COMPLETA (por exemplo, `_INVALIDA`). A exportação lê apenas do banco, então funciona depois que os vídeos foram apagados; sessão ainda em andamento ou não processada é recusada.
+
 Os subcomandos concretos são definidos pelas specs de feature em `.spec/features/`; `--help` sempre lista o que existe na versão instalada.
 
 A interface roda em localhost, sem autenticação, e aceita uma sessão por vez — o sistema é monousuário por decisão de escopo. Fechar o navegador não encerra uma sessão em andamento.
