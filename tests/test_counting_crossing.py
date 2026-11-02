@@ -99,6 +99,8 @@ class ByteTrackDuble:
     def update_with_detections(self, deteccoes_do_frame):
         ids = self._ids_por_frame[self._frame]
         self._frame += 1
+        if len(deteccoes_do_frame) == 0:
+            return deteccoes_do_frame
         return sv.Detections(
             xyxy=deteccoes_do_frame.xyxy,
             confidence=deteccoes_do_frame.confidence,
@@ -118,10 +120,16 @@ def eventos_da_trajetoria(
 ):
     """Roda um veículo só pelas posições dadas e devolve os eventos gerados.
 
-    Cada posição é o ponto de contato com o solo em um frame analisado.
+    Cada posição é o ponto de contato com o solo em um frame analisado. `None` é
+    um frame em que o veículo não foi detectado.
     """
-    quadros = [frame(deteccao_em(x, y, categoria, confianca)) for x, y in posicoes]
-    ids_por_frame = [[id_do_bytetrack] for _ in posicoes]
+    quadros = [
+        sv.Detections.empty()
+        if posicao is None
+        else frame(deteccao_em(*posicao, categoria, confianca))
+        for posicao in posicoes
+    ]
+    ids_por_frame = [[] if posicao is None else [id_do_bytetrack] for posicao in posicoes]
 
     rastreador = rastreador_para_o_clipe(MINUTO, lambda: ByteTrackDuble(ids_por_frame))
     avaliador = AvaliadorDeCruzamento(
@@ -185,7 +193,7 @@ def test_AC_006_3_sentidos_opostos_recebem_os_rotulos_configurados_para_a_camera
 
 
 def test_AC_006_3_inverter_a_ordem_dos_pontos_da_linha_troca_os_dois_rotulos():
-    """O sentido sai da normal, não da convenção interna do `LineZone`.
+    """O sentido sai da normal, não de uma convenção de lado do código.
 
     Invertendo `p1` e `p2` a normal de SUP-003 inverte, e a **mesma**
     trajetória passa a receber o outro rótulo. É esta a âncora do mapeamento.
@@ -225,3 +233,73 @@ def test_AC_006_6_oscilacao_de_fila_sobre_a_linha_nao_infla_a_contagem():
 
     assert len(eventos) == 2
     assert {evento.sentido for evento in eventos} == {"CENTRO", "ICARAI"}
+
+
+def eventos_com_outro_veiculo_em_cena(posicoes):
+    """Como `eventos_da_trajetoria`, com um segundo veículo parado em cena.
+
+    O veículo 7 segue `posicoes` (com `None` nos frames em que não é detectado);
+    o veículo 8 fica parado longe da linha em todos os frames. É o caso real: a
+    moto some atrás de um carro enquanto o resto do trânsito continua detectado.
+    """
+    parado = deteccao_em(180, 50, Categoria.CARRO, 0.9)
+    quadros, ids_por_frame = [], []
+    for posicao in posicoes:
+        if posicao is None:
+            quadros.append(frame(parado))
+            ids_por_frame.append([8])
+        else:
+            quadros.append(frame(deteccao_em(*posicao, Categoria.MOTO, 0.9), parado))
+            ids_por_frame.append([7, 8])
+
+    rastreador = rastreador_para_o_clipe(MINUTO, lambda: ByteTrackDuble(ids_por_frame))
+    avaliador = AvaliadorDeCruzamento(
+        camera=camera(),
+        rastreador=rastreador,
+        inicio_do_clipe=INICIO_DO_CLIPE,
+        fps=FPS,
+    )
+    eventos = []
+    for indice, quadro in enumerate(quadros):
+        rastreadas = rastreador.atualizar(quadro)
+        eventos.extend(avaliador.avaliar(rastreadas, indice_do_frame=indice))
+    return eventos
+
+
+def test_AC_006_1_veiculo_que_some_por_alguns_frames_e_reaparece_do_outro_lado_gera_um_evento():
+    """Detecção intermitente não apaga o cruzamento (SUP-018).
+
+    Moto atrás de um carro, ou com confiança oscilando, some da detecção por
+    alguns frames enquanto o resto do trânsito segue detectado, e reaparece já
+    do outro lado da linha. A troca de lado entre a última posição conhecida e
+    a atual é um cruzamento, por mais frames que a trilha tenha ficado sem
+    detecção dentro do clipe.
+    """
+    eventos = eventos_com_outro_veiculo_em_cena(
+        [(140, 100), (120, 100), None, None, None, None, (80, 100), (60, 100)]
+    )
+
+    assert [(evento.sentido, evento.categoria) for evento in eventos] == [
+        ("CENTRO", Categoria.MOTO)
+    ]
+    assert eventos[0].indice_do_frame == 6
+
+
+def test_AC_006_2_veiculo_que_some_e_reaparece_do_mesmo_lado_nao_gera_evento():
+    """Sumir e voltar sem trocar de lado não é cruzamento."""
+    eventos = eventos_com_outro_veiculo_em_cena(
+        [(140, 100), (120, 100), None, None, None, (110, 100), (105, 100)]
+    )
+
+    assert eventos == []
+
+
+def test_AC_006_2_atravessar_o_prolongamento_da_linha_fora_do_segmento_nao_gera_evento():
+    """A linha é o segmento entre `p1` e `p2`, não a reta inteira.
+
+    Ela vai de y=0 a y=200; quem passa de um lado ao outro em y=300 está fora
+    da faixa perpendicular ao segmento e não cruzou a linha de contagem.
+    """
+    eventos = eventos_da_trajetoria([(140, 300), (120, 300), (80, 300), (60, 300)])
+
+    assert eventos == []

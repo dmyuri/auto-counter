@@ -134,9 +134,16 @@ Critérios de aceite:
   orçamento, que passou a 133 ms — a amostragem continua 1 a cada 3, e a
   acurácia de AC-014.3 não foi tocada para caber no tempo. Afeta AC-005.3 e
   AC-005.4.
-- [x] SUP-018 — O rastreamento usa ByteTrack e o cruzamento usa LineZone, ambos
-  da biblioteca supervision, considerando como ponto do veículo o centro da base
-  da caixa delimitadora (contato com o solo). Afeta AC-006.1 e AC-006.2.
+- [x] SUP-018 — O rastreamento usa ByteTrack, da biblioteca supervision, e o
+  ponto do veículo é o centro da base da caixa delimitadora (contato com o
+  solo). O cruzamento é a troca de lado da linha desse ponto entre a última
+  posição conhecida da trilha dentro da faixa perpendicular ao segmento da linha
+  e a posição atual, sem descartar, dentro do clipe, a trilha que some da
+  detecção por alguns frames. A regra substituiu o LineZone da supervision em
+  2026-11-02: na versão 0.30, o LineZone apaga o histórico da trilha ausente por
+  2 frames analisados seguidos e perdia o cruzamento de veículos detectados de
+  forma intermitente, como motos encobertas por carros, o que foi medido na
+  sessão 000013-20261102T010600Z. Afeta AC-006.1 e AC-006.2.
 - [x] SUP-019 — A assinatura usada para deduplicar a emenda é a tripla categoria +
   sentido + posição do cruzamento ao longo da linha, com tolerância de 10% do
   comprimento da linha. Afeta AC-007.1 e AC-007.2.

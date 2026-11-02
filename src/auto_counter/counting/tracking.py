@@ -39,7 +39,7 @@ CHAVE_DO_ID_DE_RASTREIO = "id_de_rastreio"
 """Nome do campo com o id composto dentro de `Detections.data`.
 
 O `tracker_id` do `supervision` é inteiro e continua sendo o do ByteTrack,
-porque é ele que o LineZone de T-09 consome. O id da spec — o composto, que é
+porque é ele que o ByteTrack devolve. O id da spec — o composto, que é
 o que vai para o evento — viaja ao lado, no `data`.
 """
 

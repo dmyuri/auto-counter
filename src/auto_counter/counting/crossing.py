@@ -13,17 +13,20 @@ Comportamento em `.spec/features/contagem-veiculos/spec.md`:
   sentido;
 - AC-006.6 — no máximo um evento por par (id de rastreio, sentido) no clipe.
 
-Implementa SUP-018: quem decide se houve cruzamento é o `LineZone` da
-`supervision`, com o ponto de ancoragem no **centro da base** da caixa — o
-contato com o solo, não o centro da caixa.
+Implementa SUP-018: o cruzamento é a troca de lado da linha do ponto de
+ancoragem — o **centro da base** da caixa, o contato com o solo — entre a última
+posição conhecida da trilha dentro da faixa perpendicular ao segmento e a
+posição atual. A trilha que some da detecção por alguns frames não perde essa
+posição dentro do clipe: é o que faz a moto que passa encoberta por um carro
+continuar contando. Esta regra substituiu o `LineZone` da `supervision`, que
+apagava o histórico da trilha ausente por 2 frames analisados (SUP-018).
 
-**O sentido não sai da convenção "in"/"out" do `LineZone`.** Ele sai da normal
-de SUP-003, calculada por `cameras.geometry.normal_da_linha`: o deslocamento do
-ponto de ancoragem entre o frame anterior e o do cruzamento é projetado na
+**O sentido sai da normal** de SUP-003, calculada por
+`cameras.geometry.normal_da_linha`: o deslocamento do ponto de ancoragem entre a
+última posição conhecida, do outro lado, e a do cruzamento é projetado na
 normal, e o sinal dessa projeção escolhe entre `sentido_a` (a favor da normal) e
 `sentido_b` (contra). Assim o rótulo depende de uma grandeza que a spec define,
-e não de uma convenção interna da biblioteca que uma atualização dela poderia
-inverter em silêncio. Os dois testes de AC-006.3 são o que ancora isso — em
+e não de uma convenção de lado escolhida aqui. Os dois testes de AC-006.3 são o que ancora isso — em
 particular o que inverte `p1` e `p2` e espera os rótulos trocados.
 
 Os rótulos são texto vindo do YAML da câmera. Nada aqui os fixa em código nem
@@ -43,10 +46,6 @@ from auto_counter.cameras.model import Camera
 from auto_counter.counting.events import Evento
 from auto_counter.counting.timestamps import instante_do_evento
 from auto_counter.counting.tracking import CHAVE_DO_ID_DE_RASTREIO, Rastreador
-
-ANCORA = sv.Position.BOTTOM_CENTER
-"""O ponto do veículo é o centro da base da caixa (SUP-018)."""
-
 
 def _ancora_da_caixa(caixa) -> tuple[float, float]:
     """O centro da base da caixa `xyxy` (SUP-018), em pixels do frame."""
@@ -82,13 +81,10 @@ class AvaliadorDeCruzamento:
         self._p2 = (float(linha.p2.x), float(linha.p2.y))
         self._normal = normal_da_linha(linha)
 
-        self._line_zone = sv.LineZone(
-            start=sv.Point(x=self._p1[0], y=self._p1[1]),
-            end=sv.Point(x=self._p2[0], y=self._p2[1]),
-            triggering_anchors=[ANCORA],
-        )
-
-        self._ancora_anterior: dict[str, tuple[float, float]] = {}
+        # A última posição de cada trilha dentro da faixa do segmento, com o lado
+        # da linha em que ela estava. Vive o clipe inteiro: sumir da detecção
+        # por alguns frames não apaga a posição (SUP-018).
+        self._ultima_posicao: dict[str, tuple[bool, tuple[float, float]]] = {}
         self._pares_registrados: set[tuple[str, str]] = set()
 
     @property
@@ -101,9 +97,8 @@ class AvaliadorDeCruzamento:
     ) -> tuple[Evento, ...]:
         """Os eventos gerados pelos cruzamentos vistos neste frame.
 
-        Recebe as detecções **já rastreadas** por T-08 — com `tracker_id`, que é
-        o que o `LineZone` consome, e com o id composto de D-9 no `data`, que é
-        o que vai para o evento.
+        Recebe as detecções **já rastreadas** por T-08, com o id composto de D-9
+        no `data`, que é o que vai para o evento.
 
         Devolve tupla vazia quando ninguém cruzou, que é o caso de AC-006.2 e o
         caso comum de qualquer frame.
@@ -111,25 +106,24 @@ class AvaliadorDeCruzamento:
         if len(rastreadas) == 0:
             return ()
 
-        entrou, saiu = self._line_zone.trigger(rastreadas)
-
         ids = rastreadas.data[CHAVE_DO_ID_DE_RASTREIO]
         eventos: list[Evento] = []
 
         for indice in range(len(rastreadas)):
             id_de_rastreio = str(ids[indice])
             ancora = _ancora_da_caixa(rastreadas.xyxy[indice])
-            anterior = self._ancora_anterior.get(id_de_rastreio)
-            self._ancora_anterior[id_de_rastreio] = ancora
+            if not self._na_faixa_do_segmento(ancora):
+                # Fora da faixa perpendicular ao segmento o ponto não está "de um
+                # lado da linha de contagem": passar ali é cruzar o
+                # prolongamento, não a linha (AC-006.2).
+                continue
 
-            if not (bool(entrou[indice]) or bool(saiu[indice])):
+            lado = self._lado_da_linha(ancora)
+            conhecida = self._ultima_posicao.get(id_de_rastreio)
+            self._ultima_posicao[id_de_rastreio] = (lado, ancora)
+            if conhecida is None or conhecida[0] == lado:
                 continue
-            if anterior is None:
-                # Cruzamento sem frame anterior daquele id não tem deslocamento
-                # de onde tirar o sentido. Não acontece com o LineZone, que só
-                # dispara na transição, mas inventar um sentido aqui seria pior
-                # do que não contar.
-                continue
+            anterior = conhecida[1]
 
             evento = self._evento_do_cruzamento(
                 id_de_rastreio=id_de_rastreio,
@@ -186,9 +180,8 @@ class AvaliadorDeCruzamento:
         """O rótulo da câmera para o lado em que o veículo atravessou (AC-006.3).
 
         A favor da normal de SUP-003 é `sentido_a`; contra ela, `sentido_b`.
-        Projeção exatamente zero não existe aqui: o `LineZone` só dispara quando
-        o ponto mudou de lado, e mudar de lado implica deslocamento não nulo na
-        normal.
+        `anterior` e `atual` estão em lados opostos da linha, então a projeção
+        do deslocamento na normal não é nula.
         """
         deslocamento = (atual[0] - anterior[0], atual[1] - anterior[1])
         projecao = (
@@ -196,12 +189,35 @@ class AvaliadorDeCruzamento:
         )
         return self._camera.sentido_a if projecao > 0 else self._camera.sentido_b
 
+    def _fracao_ao_longo_da_linha(self, ponto: tuple[float, float]) -> float:
+        """A projeção do ponto sobre `p1 -> p2`, em unidades do segmento."""
+        dx = self._p2[0] - self._p1[0]
+        dy = self._p2[1] - self._p1[1]
+        return ((ponto[0] - self._p1[0]) * dx + (ponto[1] - self._p1[1]) * dy) / (
+            dx * dx + dy * dy
+        )
+
+    def _na_faixa_do_segmento(self, ponto: tuple[float, float]) -> bool:
+        """Se o ponto está entre as perpendiculares ao segmento em `p1` e `p2`."""
+        return 0.0 <= self._fracao_ao_longo_da_linha(ponto) <= 1.0
+
+    def _lado_da_linha(self, ponto: tuple[float, float]) -> bool:
+        """De que lado da reta `p1 -> p2` o ponto está, pelo produto vetorial.
+
+        `True` para um lado e `False` para o outro; o ponto exatamente sobre a
+        reta fica no lado `False`. Só a troca importa: o rótulo do sentido sai
+        da normal, em `_sentido_do_deslocamento`.
+        """
+        dx = self._p2[0] - self._p1[0]
+        dy = self._p2[1] - self._p1[1]
+        return dx * (ponto[1] - self._p1[1]) - dy * (ponto[0] - self._p1[0]) < 0
+
     def _posicao_na_linha(self, ancora: tuple[float, float]) -> float:
         """Onde ao longo da linha o cruzamento aconteceu, de 0 a 1 (SUP-019).
 
         É a projeção do ponto de ancoragem sobre o segmento `p1 -> p2`,
-        normalizada pelo comprimento. Fica presa em 0..1 porque o `LineZone`
-        também conta quem cruza o prolongamento da linha, e `Evento` recusa
+        normalizada pelo comprimento. Fica presa em 0..1 por segurança: o
+        cruzamento só é avaliado dentro da faixa do segmento, e `Evento` recusa
         fração fora desse intervalo.
         """
         dx = self._p2[0] - self._p1[0]

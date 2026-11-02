@@ -24,7 +24,7 @@ Câmera do MVP: **000013** — 1280×720 a 30 fps, H.264, clipes de 59,93 s e ~3
 Componentes de visão computacional:
 - Detecção: Ultralytics YOLO11n — licença **AGPL-3.0**, portanto este repositório é AGPL-3.0
 - Inferência: ONNX Runtime (CPU), com o modelo exportado para `.onnx`
-- Rastreamento e contagem: `supervision` (ByteTrack + LineZone, cruzamento de linha com direção)
+- Rastreamento e contagem: `supervision` (ByteTrack), com cruzamento de linha com direção próprio, pela troca de lado do contato com o solo
 - Captura: download HTTP do `.mp4` público, um arquivo por minuto; OpenCV lê o arquivo local. **FFmpeg não é usado** — a fonte já é um MP4 progressivo e o OpenCV embarca a decodificação H.264 necessária
 - Configuração: um YAML por câmera em `config/cameras/<id>.yaml`, validado com Pydantic
 

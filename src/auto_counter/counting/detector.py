@@ -80,8 +80,7 @@ class Detector:
     def detectar(self, frame: np.ndarray) -> sv.Detections:
         """Detecta os veículos do frame BGR e devolve `supervision.Detections`.
 
-        A saída é `sv.Detections` porque é o que ByteTrack e LineZone consomem
-        (SUP-018). Cada detecção carrega a categoria traduzida e a classe COCO
+        A saída é `sv.Detections` porque é o que o ByteTrack consome (SUP-018). Cada detecção carrega a categoria traduzida e a classe COCO
         original: SUP-023 precisa do histórico por rastreio e AC-008.2
         persiste a confiança.
         """
@@ -198,8 +197,8 @@ class Detector:
             axis=1,
         ).astype(np.float32)
 
-        # Caixa que encosta na borda não pode sair do frame: LineZone trabalha
-        # com o centro da base da caixa (SUP-018), e um valor fora do quadro
+        # Caixa que encosta na borda não pode sair do frame: o cruzamento usa
+        # o centro da base da caixa (SUP-018), e um valor fora do quadro
         # deslocaria esse ponto.
         altura, largura = forma_do_frame[:2]
         xyxy[:, [0, 2]] = xyxy[:, [0, 2]].clip(0, largura)
