@@ -569,3 +569,67 @@ def test_AC_003_1_sessao_com_clipe_republicado_grava_apenas_clipes_distintos(
     ]
     conteudos = [caminho.read_bytes() for caminho in videos]
     assert len(set(conteudos)) == 2
+
+
+def test_AC_012_1_o_gancho_recebe_cada_minuto_resolvido_em_ordem_com_o_desfecho(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    # Minuto 2 perdido (janela de 0 a 90 s sem clipe novo); o minuto 3 pega o
+    # clipe publicado em t=100.
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (100.0, "clipe-c")],
+        clipes_legiveis("clipe-a", "clipe-c"),
+    )
+    chamadas: list[tuple[int, bool]] = []
+
+    capturar(
+        camera,
+        3,
+        data_dir=tmp_path / "data",
+        cliente=servidor.cliente(),
+        agora=relogio.agora,
+        dormir=DormirFalso(relogio),
+        ao_resolver_minuto=lambda minuto, capturado: chamadas.append(
+            (minuto, capturado)
+        ),
+    )
+
+    assert chamadas == [(1, True), (2, False), (3, True)]
+
+
+def test_AC_012_1_o_gancho_e_chamado_depois_do_manifest_gravado(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (100.0, "clipe-c")],
+        clipes_legiveis("clipe-a", "clipe-c"),
+    )
+    visto: list[tuple[list[int], list[int]]] = []
+
+    def observador(minuto: int, capturado: bool) -> None:
+        dir_sessao = next((tmp_path / "data" / "sessions").iterdir())
+        gravado = ler(dir_sessao)
+        visto.append(
+            (
+                [item.minuto for item in gravado.minutos_capturados],
+                [item.minuto for item in gravado.minutos_perdidos],
+            )
+        )
+
+    capturar(
+        camera,
+        3,
+        data_dir=tmp_path / "data",
+        cliente=servidor.cliente(),
+        agora=relogio.agora,
+        dormir=DormirFalso(relogio),
+        ao_resolver_minuto=observador,
+    )
+
+    # Em cada chamada, o manifest em disco já traz o minuto que acabou de ser
+    # resolvido.
+    assert visto == [([1], []), ([1], [2]), ([1, 3], [2])]

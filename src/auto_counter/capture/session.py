@@ -28,6 +28,9 @@ realmente aconteceu, e é sobre ela que o status é calculado — desistência n
 cai na regra do denominador pedido. Enquanto `parada` for `None`, ou nunca
 sinalizar, o laço segue até o minuto N.
 
+O progresso de AC-012.1 de `interface-sessao` sai por `ao_resolver_minuto`, um
+observador opcional chamado a cada minuto resolvido.
+
 Relógio, espera e cliente HTTP entram por parâmetro (D-7): uma sessão de 15
 minutos com janela de 90 s não teria como ser testada em tempo real.
 """
@@ -342,6 +345,7 @@ def capturar(
     parada: Parada | None = None,
     manter_videos: bool = False,
     persistencia: Persistencia | None = None,
+    ao_resolver_minuto: Callable[[int, bool], None] | None = None,
 ) -> ResultadoDaSessao:
     """Captura N minutos de clipes da câmera e devolve o desfecho da sessão.
 
@@ -374,6 +378,12 @@ def capturar(
     `persistencia` é o gancho opcional de `persistencia-resultados` (D-1 e D-2):
     `None` (o padrão) não observa nada, e esta função nunca importa banco por
     conta própria.
+
+    `ao_resolver_minuto` é o observador de progresso de AC-012.1 de
+    `interface-sessao`: recebe o número do minuto e se ele foi capturado
+    (`True`) ou perdido (`False`), **depois** de o manifest gravar o desfecho.
+    Não é chamado para o minuto abandonado por parada, que não existe
+    (AC-003.6). `None` (o padrão) não observa nada.
     """
     duracao_pedida = validar_duracao(minutos)
     url = url_do_clipe(camera)
@@ -443,6 +453,9 @@ def capturar(
             sha256_do_anterior = desfecho.sha256
         else:
             manifest.registrar_perda(minuto, motivo=desfecho.motivo)
+
+        if ao_resolver_minuto is not None:
+            ao_resolver_minuto(minuto, isinstance(desfecho, _ClipeAceito))
 
         inicio_da_janela = agora()
 

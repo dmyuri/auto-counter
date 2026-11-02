@@ -324,3 +324,29 @@ def test_AC_003_6_nenhuma_parada_deixa_excecao_escapar_para_o_usuario(
     assert resultado.duracao_real == len(resultado.minutos_capturados) + len(
         resultado.minutos_perdidos
     )
+
+
+def test_AC_012_1_o_minuto_abandonado_por_parada_nao_chega_ao_gancho(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
+    # O minuto 3 é aceito em t=120; a parada chega no meio da janela do minuto 4.
+    parada = ParadaFalsa(relogio, segundo=140.0)
+    chamadas: list[tuple[int, bool]] = []
+
+    resultado = capturar(
+        camera,
+        15,
+        data_dir=tmp_path / "data",
+        cliente=servidor.cliente(),
+        agora=relogio.agora,
+        dormir=DormirFalso(relogio),
+        parada=parada,
+        ao_resolver_minuto=lambda minuto, capturado: chamadas.append(
+            (minuto, capturado)
+        ),
+    )
+
+    assert resultado.duracao_real == 3
+    assert chamadas == [(1, True), (2, True), (3, True)]
