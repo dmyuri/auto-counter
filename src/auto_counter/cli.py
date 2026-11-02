@@ -22,6 +22,11 @@ De `.spec/features/exportacao-xlsx/spec.md`: AC-010.1 (o comando `session
 export` gera o XLSX no diretório de dados), AC-010.5 (sessão INVÁLIDA também
 gera planilha, com o aviso) e AC-010.7 (a exportação lê apenas do banco).
 
+De `.spec/features/interface-sessao/spec.md`: AC-013.1 e AC-013.2 (a trava de
+sessão única recusa a segunda sessão, citando a câmera e o horário da que está
+em curso, e ignora a trava órfã) e SUP-052 (a trava vale para `session capture`
+e `session process`; `session list` e `session export` ficam livres).
+
 Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 """
@@ -82,6 +87,7 @@ from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
     VARIAVEL_DATA_DIR,
     data_dir_do_ambiente,
 )
+from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError, adquirir_trava
 from auto_counter.pipeline.processing import (
     PersistenciaFalhouError,
     conferir_modelo,
@@ -205,6 +211,22 @@ def _agora() -> datetime:
 def _dormir(segundos: float) -> None:
     """Espera de verdade entre as checagens, injetada no laço (D-7)."""
     time.sleep(segundos)
+
+
+def _trava(data_dir: Path, comando: str, camera_: Camera):
+    """A trava de sessão única do comando (AC-013.1, AC-013.2, SUP-052).
+
+    Contexto que o comando entra **antes** de qualquer requisição ou leitura de
+    vídeo; a recusa sobe como `OutraSessaoEmAndamentoError`, que cada comando
+    traduz em mensagem e código 1.
+    """
+    return adquirir_trava(
+        data_dir,
+        comando=comando,
+        id_camera=camera_.id,
+        nome_camera=camera_.nome,
+        agora=_agora,
+    )
 
 
 def _cliente_http() -> httpx.Client:
@@ -379,6 +401,9 @@ def capturar_sessao(
 
     try:
         with ExitStack() as pilha:
+            # Antes de qualquer requisição: a segunda sessão é recusada sem
+            # tocar o servidor (AC-013.1).
+            pilha.enter_context(_trava(data_dir, "capture", escolhida))
             cliente = pilha.enter_context(_cliente_http())
 
             # Falha ao abrir o banco não interrompe a captura (`CLAUDE.md`):
@@ -413,6 +438,8 @@ def capturar_sessao(
                 manter_videos=keep_clips,
                 persistencia=persistencia,
             )
+    except OutraSessaoEmAndamentoError as falha:
+        raise _erro(str(falha)) from falha
     except BaseUrlAusenteError as falha:
         raise _erro(str(falha)) from falha
     except OSError as falha:
@@ -543,6 +570,23 @@ def processar_sessao_capturada(
     registro = _carrega(config_dir)
     escolhida = _camera_do_registro(registro, manifest.id_camera, config_dir)
 
+    try:
+        with _trava(data_dir, "process", escolhida):
+            _processar_e_persistir(
+                config, data_dir, dir_sessao, manifest.manter_videos, escolhida
+            )
+    except OutraSessaoEmAndamentoError as falha:
+        raise _erro(str(falha)) from falha
+
+
+def _processar_e_persistir(
+    config: ConfiguracaoDoProcessamento,
+    data_dir: Path,
+    dir_sessao: Path,
+    manter_videos: bool,
+    escolhida: Camera,
+) -> None:
+    """O corpo de `session process` que roda com a trava de sessão única."""
     # O modelo é conferido **antes** de abrir qualquer vídeo: descobrir que ele
     # falta depois de minutos de processamento seria desperdício puro.
     try:
@@ -576,7 +620,7 @@ def processar_sessao_capturada(
             data_dir,
             dir_sessao,
             camera=escolhida,
-            manter_videos=manifest.manter_videos,
+            manter_videos=manter_videos,
             persistir=persistir_sessao,
         )
     except PersistenciaFalhouError as falha:
