@@ -18,6 +18,10 @@ minutos é recusada antes de qualquer requisição), AC-003.5 (a opção de mant
 vídeos é explícita e vem desligada por padrão) e AC-003.6 (o Ctrl+C encerra a
 sessão pela regra da duração real, e não mata o processo).
 
+De `.spec/features/exportacao-xlsx/spec.md`: AC-010.1 (o comando `session
+export` gera o XLSX no diretório de dados), AC-010.5 (sessão INVÁLIDA também
+gera planilha, com o aviso) e AC-010.7 (a exportação lê apenas do banco).
+
 Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 """
@@ -69,10 +73,21 @@ from auto_counter.counting.session import (
     SessaoSemClipes,
     processar_sessao,
 )
+from auto_counter.export import (
+    SessaoEmAndamentoError,
+    SessaoNaoEncontradaError,
+    SessaoNaoProcessadaError,
+    exportar_sessao,
+)
+from auto_counter.export.format import linha_de_aviso
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.connection import conectar as conectar_ao_banco
 from auto_counter.storage.persist import persistir_sessao
-from auto_counter.storage.sessions import PersistenciaDaCaptura, listar_sessoes
+from auto_counter.storage.sessions import (
+    PersistenciaDaCaptura,
+    ler_sessao,
+    listar_sessoes,
+)
 
 VARIAVEL_DATA_DIR = "AUTO_COUNTER_DATA_DIR"
 """Variável de ambiente com o diretório de dados das sessões."""
@@ -636,6 +651,51 @@ def listar_sessoes_capturadas(
             f"{item.id_sessao}  {item.id_camera}  {periodo}  {status_texto}  "
             f"{item.total_de_eventos} veículo(s)"
         )
+
+
+@session_app.command("export")
+def exportar_sessao_gravada(
+    id_sessao: str = typer.Argument(
+        ...,
+        metavar="ID_SESSAO",
+        help="Id da sessão, como no histórico (ex.: 000013-...Z).",
+    ),
+) -> None:
+    """Exporta o resultado de uma sessão processada em XLSX (US-010).
+
+    Lê apenas o banco: não toca em vídeo nem em rede, e por isso funciona
+    depois que os clipes foram apagados (AC-010.7). O arquivo cai no diretório
+    de dados. Sessão INVÁLIDA também gera planilha, com o aviso nas abas e no
+    nome do arquivo (AC-010.5).
+    """
+    data_dir = _data_dir()
+    caminho_banco = caminho_do_banco(data_dir)
+
+    # Foi pedida uma sessão específica, então banco ausente é erro — e a
+    # exportação não pode criar um banco vazio só por ter sido chamada.
+    if not caminho_banco.is_file():
+        raise _erro(
+            f"nenhuma sessão foi gravada ainda: o banco {caminho_banco} não existe"
+        )
+
+    try:
+        with conectar_ao_banco(data_dir) as conexao:
+            caminho = exportar_sessao(conexao, id_sessao, data_dir=data_dir)
+            sessao = ler_sessao(conexao, id_sessao)
+    except (
+        SessaoNaoEncontradaError,
+        SessaoEmAndamentoError,
+        SessaoNaoProcessadaError,
+    ) as falha:
+        raise _erro(str(falha)) from falha
+    except Exception as falha:  # noqa: BLE001 — nenhuma falha crua de banco ou disco
+        raise _erro(f"não foi possível exportar a sessão '{id_sessao}': {falha}") from falha
+
+    typer.echo(f"Planilha:          {caminho}")
+    typer.echo(f"Status:            {sessao.status.value}")
+    aviso = linha_de_aviso(sessao)
+    if aviso is not None:
+        typer.echo(aviso)
 
 
 @model_app.command("export")
