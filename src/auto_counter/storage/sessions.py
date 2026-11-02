@@ -358,6 +358,7 @@ class PersistenciaDaCaptura:
                 duracao_pedida=duracao_pedida,
                 sentido_a=self._camera.sentido_a,
                 sentido_b=self._camera.sentido_b,
+                nome_camera=self._camera.nome,
             )
         except Exception as falha:  # noqa: BLE001 — falha de banco não derruba a captura
             self._desfazer_transacao_pendente()

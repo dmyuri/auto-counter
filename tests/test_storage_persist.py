@@ -28,7 +28,7 @@ from auto_counter.storage.persist import (
     SessaoAindaEmCapturaError,
     persistir_sessao,
 )
-from auto_counter.storage.sessions import ler_sessao
+from auto_counter.storage.sessions import abrir_sessao, ler_sessao
 
 ID_CAMERA = "000013"
 ID_SESSAO = "000013-20260101T080000Z"
@@ -160,6 +160,48 @@ def test_AC_008_1_persistir_grava_a_sessao_com_todos_os_campos_do_manifest(tmp_p
     assert sessao.limiar_de_confianca == registro.configuracao.limiar_de_confianca
     assert sessao.sentido_a == SENTIDO_A
     assert sessao.sentido_b == SENTIDO_B
+
+
+def test_AC_010_4_persistir_preenche_o_nome_de_sessao_que_nasceu_sem_ele(tmp_path):
+    dir_sessao, _, _ = _criar_sessao_completa(tmp_path)
+
+    with conectar(tmp_path) as conexao:
+        abrir_sessao(
+            conexao,
+            id_sessao=ID_SESSAO,
+            id_camera=ID_CAMERA,
+            criada_em=LAST_MODIFIED_BASE,
+            duracao_pedida=2,
+            sentido_a=SENTIDO_A,
+            sentido_b=SENTIDO_B,
+        )
+        assert ler_sessao(conexao, ID_SESSAO).nome_camera is None
+
+        persistir_sessao(conexao, dir_sessao, camera=camera())
+
+        assert ler_sessao(conexao, ID_SESSAO).nome_camera == "Praça Exemplo"
+
+
+def test_persistir_nao_sobrescreve_o_nome_gravado_na_captura(tmp_path):
+    dir_sessao, _, _ = _criar_sessao_completa(tmp_path)
+
+    with conectar(tmp_path) as conexao:
+        abrir_sessao(
+            conexao,
+            id_sessao=ID_SESSAO,
+            id_camera=ID_CAMERA,
+            criada_em=LAST_MODIFIED_BASE,
+            duracao_pedida=2,
+            sentido_a=SENTIDO_A,
+            sentido_b=SENTIDO_B,
+            nome_camera="Nome da época",
+        )
+
+        persistir_sessao(
+            conexao, dir_sessao, camera=camera().model_copy(update={"nome": "Nome novo"})
+        )
+
+        assert ler_sessao(conexao, ID_SESSAO).nome_camera == "Nome da época"
 
 
 def test_AC_008_5_persistir_a_mesma_sessao_duas_vezes_nao_duplica_eventos(tmp_path):

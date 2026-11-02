@@ -109,6 +109,29 @@ def test_AC_008_1_a_linha_da_sessao_existe_desde_o_inicio_da_captura(
         assert sessao_no_momento.sentido_b == camera.sentido_b
 
 
+def test_AC_010_4_a_captura_grava_o_nome_da_camera_na_sessao(
+    camera, tmp_path, clipes_legiveis
+):
+    data_dir = tmp_path / "data"
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(relogio, [(0.0, "clipe-a")], clipes_legiveis("clipe-a"))
+
+    with conectar(data_dir) as conexao:
+        capturar(
+            camera,
+            1,
+            data_dir=data_dir,
+            cliente=servidor.cliente(),
+            agora=relogio.agora,
+            dormir=DormirFalso(relogio),
+            persistencia=PersistenciaDaCaptura(conexao, camera=camera),
+        )
+        id_sessao = conexao.execute("SELECT id_sessao FROM sessao").fetchone()[0]
+        sessao = ler_sessao(conexao, id_sessao)
+
+    assert sessao.nome_camera == camera.nome
+
+
 def test_AC_008_1_o_fim_da_captura_grava_periodo_status_e_duracao_real(
     camera, tmp_path, clipes_legiveis
 ):

@@ -138,7 +138,16 @@ def persistir_sessao(
             duracao_pedida=manifest.duracao_pedida,
             sentido_a=camera.sentido_a,
             sentido_b=camera.sentido_b,
+            nome_camera=camera.nome,
             comitar=False,
+        )
+        # AC-010.4: o nome gravado na captura é o vigente na sessão e não é
+        # sobrescrito; só a linha que nasceu sem nome (sessão anterior à
+        # migration 002, ou captura em que o banco falhou) é preenchida.
+        conexao.execute(
+            "UPDATE sessao SET nome_camera = COALESCE(nome_camera, ?) "
+            "WHERE id_sessao = ?",
+            (camera.nome, manifest.id_sessao),
         )
         fechar_captura(
             conexao,
