@@ -81,9 +81,12 @@ Critérios de aceite:
   sufixo do status quando ele não for COMPLETA, como em
   `000013_20260907_0800_15min_INVALIDA.xlsx`. Gravado no diretório de dados.
   Afeta AC-010.1 e AC-010.5.
-- [x] SUP-033 — Os timestamps são convertidos de UTC para o horário local de
-  Brasília na exportação e escritos como data e hora reais do Excel, não como
-  texto. Afeta AC-010.2 e AC-010.3.
+- [x] SUP-033 — Os timestamps dos eventos e o período real da sessão são
+  convertidos de UTC para o horário local de Brasília na exportação e escritos
+  como data e hora reais do Excel, não como texto. A coluna de minuto da aba
+  PorMinuto não é timestamp: é o minuto ordinal da sessão (1..N), como gravado
+  pela persistência (D-4 de `persistencia-resultados`). Afeta AC-010.2,
+  AC-010.3 e AC-010.4.
 - [x] SUP-034 — A aba PorMinuto tem 11 colunas: minuto, estado do minuto, oito
   combinações de sentido e categoria (2 sentidos × 4 categorias) e o total.
   Afeta AC-010.3.
@@ -115,7 +118,8 @@ Revisado história por história.
   AC-008.1, AC-008.2 e AC-008.3, e AC-010.3 só funciona por causa da distinção
   entre SEM_DADO e zero fixada em SUP-028 e AC-008.4. AC-010.6 depende da
   idempotência de AC-008.5. AC-010.4 passou a imprimir a duração real e o
-  encerramento pelo usuário, campos acrescentados a AC-008.1.
+  encerramento pelo usuário, campos acrescentados a AC-008.1, e o nome da
+  câmera, que levou à migration 002 acrescentando-o à linha de sessão.
 - `captura-clipes` — AC-010.5 exibe os status de AC-004.4 a AC-004.6 e agora
   também no nome do arquivo. O conflito que estava anotado aqui deixou de
   existir: como a exportação de sessão INVÁLIDA foi mantida, SUP-021 de
