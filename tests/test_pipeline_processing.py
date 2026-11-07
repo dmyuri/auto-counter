@@ -27,12 +27,17 @@ from auto_counter.storage.connection import caminho_do_banco, conectar
 from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.minutes import ler_agregados
 from auto_counter.storage.sessions import ler_sessao
+from auto_counter.pipeline.state import NOME_DO_ESTADO
 from tests.test_cli_process import (  # noqa: F401  (fixtures usadas por nome)
     ID_SESSAO,
     DetectorDuble,
     data_dir,
+    detector,
     modelo,
     monta_sessao,
+    processa,
+    registro,
+    runner,
     videos,
 )
 from tests.test_counting_session import ParadaDuble, camera
@@ -180,3 +185,55 @@ def test_conferir_modelo_devolve_o_caminho_e_a_versao(data_dir, modelo):
 def test_conferir_modelo_ausente_levanta_modelo_ausente(data_dir):
     with pytest.raises(ModeloAusenteError):
         conferir_modelo(data_dir)
+
+
+def test_AC_016_2_processar_repassa_os_ganchos_a_processar_sessao(
+    data_dir, monkeypatch
+):
+    recebidos = {}
+
+    def espiao(dir_sessao, **kwargs):
+        recebidos.update(kwargs)
+
+    monkeypatch.setattr("auto_counter.pipeline.processing.processar_sessao", espiao)
+
+    def aceitar(minuto, evento):
+        pass
+
+    def descartar(minuto):
+        pass
+
+    roda_processar(
+        monta_sessao(data_dir),
+        ao_aceitar_evento=aceitar,
+        ao_descartar_minuto=descartar,
+    )
+
+    assert recebidos["ao_aceitar_evento"] is aceitar
+    assert recebidos["ao_descartar_minuto"] is descartar
+
+
+def test_AC_016_2_sem_ganchos_processar_nao_passa_nada(data_dir, monkeypatch):
+    recebidos = {}
+
+    def espiao(dir_sessao, **kwargs):
+        recebidos.update(kwargs)
+
+    monkeypatch.setattr("auto_counter.pipeline.processing.processar_sessao", espiao)
+
+    roda_processar(monta_sessao(data_dir))
+
+    assert recebidos["ao_aceitar_evento"] is None
+    assert recebidos["ao_descartar_minuto"] is None
+
+
+def test_session_process_continua_sem_anotar_quantidades(
+    runner, registro, data_dir, modelo, detector
+):
+    """`session process` não passa ganchos: nenhum estado é gravado (Fora de escopo)."""
+    monta_sessao(data_dir)
+
+    resultado = processa(runner, registro)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert not (data_dir / NOME_DO_ESTADO).exists()

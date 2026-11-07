@@ -22,6 +22,7 @@ from auto_counter.capture.cleanup import descartar_videos
 from auto_counter.counting import model as modelo_de_deteccao
 from auto_counter.counting.clip import DetectorDoClipe
 from auto_counter.counting.config import ConfiguracaoDoProcessamento
+from auto_counter.counting.events import Evento
 from auto_counter.counting.events import NOME_DO_ARQUIVO_DE_EVENTOS
 from auto_counter.counting.model import caminho_do_modelo
 from auto_counter.counting.session import (
@@ -74,12 +75,17 @@ def processar(
     versao_do_modelo: str,
     parada: ParadaDoProcessamento | None = None,
     ao_resolver_minuto: Callable[[int], None] | None = None,
+    ao_aceitar_evento: Callable[[int, Evento], None] | None = None,
+    ao_descartar_minuto: Callable[[int], None] | None = None,
 ) -> ResultadoDaContagem:
     """Conta os veículos da sessão e grava o `eventos.json`.
 
     Cancelada a pedido do usuário (AC-012.5), apaga o `eventos.json` parcial —
     um arquivo meio escrito não pode parecer resultado — e relevanta
     `ProcessamentoCancelado`. Nada é persistido e nenhum vídeo é apagado.
+
+    `ao_aceitar_evento` e `ao_descartar_minuto` são repassados a
+    `processar_sessao` (acompanhamento ao vivo). `session process` não os passa.
     """
     try:
         return processar_sessao(
@@ -90,6 +96,8 @@ def processar(
             versao_do_modelo=versao_do_modelo,
             parada=parada,
             ao_resolver_minuto=ao_resolver_minuto,
+            ao_aceitar_evento=ao_aceitar_evento,
+            ao_descartar_minuto=ao_descartar_minuto,
         )
     except ProcessamentoCancelado:
         (Path(dir_sessao) / NOME_DO_ARQUIVO_DE_EVENTOS).unlink(missing_ok=True)

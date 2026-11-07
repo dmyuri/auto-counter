@@ -12,7 +12,10 @@ e não conhece `streamlit` nem `auto_counter.cli`: tudo o que varia — relógio
 espera, cliente HTTP, detector e parada — entra por parâmetro, como em
 `capturar`.
 
-O desfecho de cada fase é gravado no estado da sessão (`sessao_atual.json`). As
+O desfecho de cada fase é gravado no estado da sessão (`sessao_atual.json`).
+Por `acompanhamento-ao-vivo`, o estado também recebe cada evento aceito, o
+desconto de um minuto que falhou e o instante do desfecho, medido pelo mesmo
+relógio `agora` que marcou o início. As
 exceções inesperadas marcam o estado como `FALHOU` e sobem, para o comando
 traduzi-las em mensagem e código de saída.
 """
@@ -86,6 +89,7 @@ def executar_sessao(
         nome_camera=camera.nome,
         duracao_pedida=duracao,
         iniciada_em=agora(),
+        agora=agora,
     )
     anotador.iniciar()
 
@@ -146,6 +150,10 @@ def executar_sessao(
                 versao_do_modelo=versao,
                 parada=criar_parada(),
                 ao_resolver_minuto=lambda _minuto: anotador.minuto_processado(),
+                ao_aceitar_evento=lambda minuto, evento: anotador.evento_aceito(
+                    minuto, evento.categoria
+                ),
+                ao_descartar_minuto=anotador.minuto_descartado,
             )
         except ProcessamentoCancelado:
             anotador.terminar(
