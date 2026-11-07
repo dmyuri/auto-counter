@@ -87,6 +87,10 @@ Critérios de aceite:
   eventos já exibidos, quando o sistema descarta os eventos desse minuto (D-4 de
   `contagem-veiculos`), então as quantidades de cada categoria e o total voltam
   ao valor que tinham antes de esse minuto começar a ser processado.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o desconto passa a ser só dos eventos do minuto em que
+  > o vídeo falhou, mantidos os minutos já concluídos daquele vídeo (AC-028.9).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
 US-017 — Acompanhar o tempo decorrido da sessão
 Como integrante do projeto de extensão, quero ver há quanto tempo a sessão está
