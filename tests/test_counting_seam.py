@@ -28,7 +28,7 @@ from datetime import datetime, timedelta, timezone
 
 from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
 from auto_counter.counting.events import Evento
-from auto_counter.counting.seam import assinatura, deduplicar
+from auto_counter.counting.seam import FiltroDaEmenda, assinatura, deduplicar
 
 FPS = 30.0
 DURACAO_DO_CLIPE_ANTERIOR = 59.93
@@ -245,3 +245,152 @@ def test_AC_007_4_clipes_nao_adjacentes_nao_aplicam_a_janela_de_deduplicacao():
     )
 
     assert dedup([anterior], [atual], adjacentes=False) == (atual,)
+
+
+def filtro(anteriores, *, adjacentes=True, config=CONFIG):
+    """O `FiltroDaEmenda` do cenário padrão de dois clipes de 30 fps."""
+    return FiltroDaEmenda(
+        eventos_do_clipe_anterior=anteriores,
+        adjacentes=adjacentes,
+        fps_do_clipe_anterior=FPS,
+        duracao_do_clipe_anterior=DURACAO_DO_CLIPE_ANTERIOR,
+        config=config,
+    )
+
+
+def test_AC_016_3_filtro_incremental_da_o_mesmo_resultado_que_deduplicar():
+    """Alimentado evento a evento, o filtro decide como `deduplicar` (D-1).
+
+    Cenários: dentro e fora da janela, assinatura igual, próxima da tolerância e
+    diferente, dois veículos iguais no início do clipe seguinte e não adjacentes.
+    """
+    ant = INICIO_DO_CLIPE_ANTERIOR
+    atu = INICIO_DO_CLIPE_ATUAL
+    fim = evento(minuto=3, indice_do_frame=1790, inicio_do_clipe=ant)
+    cedo = evento(minuto=3, indice_do_frame=1500, inicio_do_clipe=ant)
+
+    cenarios = [
+        ([fim], [evento(minuto=4, indice_do_frame=15, inicio_do_clipe=atu)], True),
+        ([cedo], [evento(minuto=4, indice_do_frame=15, inicio_do_clipe=atu)], True),
+        ([fim], [evento(minuto=4, indice_do_frame=90, inicio_do_clipe=atu)], True),
+        (
+            [fim],
+            [
+                evento(
+                    minuto=4,
+                    indice_do_frame=15,
+                    inicio_do_clipe=atu,
+                    posicao_na_linha=0.60,
+                )
+            ],
+            True,
+        ),
+        (
+            [fim],
+            [
+                evento(
+                    minuto=4,
+                    indice_do_frame=15,
+                    inicio_do_clipe=atu,
+                    posicao_na_linha=0.61,
+                )
+            ],
+            True,
+        ),
+        (
+            [fim],
+            [
+                evento(
+                    minuto=4,
+                    indice_do_frame=15,
+                    inicio_do_clipe=atu,
+                    categoria=Categoria.MOTO,
+                ),
+                evento(
+                    minuto=4,
+                    indice_do_frame=20,
+                    inicio_do_clipe=atu,
+                    sentido="ICARAI",
+                ),
+            ],
+            True,
+        ),
+        (
+            [fim],
+            [
+                evento(
+                    minuto=4, indice_do_frame=10, inicio_do_clipe=atu, id_do_rastreador=1
+                ),
+                evento(
+                    minuto=4, indice_do_frame=40, inicio_do_clipe=atu, id_do_rastreador=2
+                ),
+            ],
+            True,
+        ),
+        ([fim], [evento(minuto=5, indice_do_frame=15, inicio_do_clipe=atu)], False),
+        ([], [evento(minuto=4, indice_do_frame=15, inicio_do_clipe=atu)], True),
+    ]
+
+    for anteriores, atuais, adjacentes in cenarios:
+        incremental = filtro(anteriores, adjacentes=adjacentes)
+        aceitos = tuple(
+            e for e in atuais if incremental.aceita(e, fps_do_clipe_atual=FPS)
+        )
+        assert aceitos == dedup(anteriores, atuais, adjacentes=adjacentes)
+
+
+def test_AC_016_3_cruzamento_duplicado_na_emenda_e_recusado_no_momento_em_que_chega():
+    """A duplicata recebe `False` na própria chamada, sem esperar o clipe acabar."""
+    anterior = evento(
+        minuto=3, indice_do_frame=1790, inicio_do_clipe=INICIO_DO_CLIPE_ANTERIOR
+    )
+    duplicata = evento(
+        minuto=4,
+        indice_do_frame=15,
+        inicio_do_clipe=INICIO_DO_CLIPE_ATUAL,
+        posicao_na_linha=0.52,
+    )
+
+    assert filtro([anterior]).aceita(duplicata, fps_do_clipe_atual=FPS) is False
+
+
+def test_AC_016_3_filtro_sem_anterior_aceita_tudo():
+    """Primeiro minuto, ou minuto depois de um D-4: nada para suprimir."""
+    qualquer = evento(
+        minuto=1, indice_do_frame=0, inicio_do_clipe=INICIO_DO_CLIPE_ATUAL
+    )
+
+    assert FiltroDaEmenda.sem_anterior().aceita(qualquer, fps_do_clipe_atual=FPS)
+
+
+def test_AC_007_2_filtro_aceita_veiculo_de_assinatura_diferente_na_emenda():
+    """Categoria, sentido ou posição diferentes: veículo novo, mesmo na janela."""
+    anterior = evento(
+        minuto=3,
+        indice_do_frame=1790,
+        inicio_do_clipe=INICIO_DO_CLIPE_ANTERIOR,
+        posicao_na_linha=0.20,
+    )
+    outra_categoria = evento(
+        minuto=4,
+        indice_do_frame=15,
+        inicio_do_clipe=INICIO_DO_CLIPE_ATUAL,
+        categoria=Categoria.CAMINHAO,
+        posicao_na_linha=0.20,
+    )
+    outro_sentido = evento(
+        minuto=4,
+        indice_do_frame=15,
+        inicio_do_clipe=INICIO_DO_CLIPE_ATUAL,
+        sentido="ICARAI",
+        posicao_na_linha=0.20,
+    )
+    outra_posicao = evento(
+        minuto=4,
+        indice_do_frame=15,
+        inicio_do_clipe=INICIO_DO_CLIPE_ATUAL,
+        posicao_na_linha=0.35,
+    )
+
+    for novo in (outra_categoria, outro_sentido, outra_posicao):
+        assert filtro([anterior]).aceita(novo, fps_do_clipe_atual=FPS) is True

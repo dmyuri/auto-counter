@@ -26,6 +26,11 @@ truncar perderia resolução justamente na borda que decide a emenda. Por isso a
 duração e o fps de cada clipe entram como parâmetro: os dois são lidos do
 próprio arquivo de vídeo (T-11), e nada aqui fixa 59,93 s nem 30 fps.
 
+**Avaliação evento a evento:** por causa da feature `acompanhamento-ao-vivo`
+(SUP-053), a emenda é decidida quando cada cruzamento é gerado, por
+`FiltroDaEmenda`, e não depois do clipe inteiro. `deduplicar` continua
+existindo, implementada em cima do filtro, e os eventos gravados são os mesmos.
+
 Este módulo não conhece manifest nem sessão: quem decide se dois clipes são
 adjacentes é T-12, e passa a decisão em `adjacentes`.
 """
@@ -94,6 +99,71 @@ def _deslocamento(evento: Evento, fps: float) -> float:
     return evento.indice_do_frame / fps
 
 
+class FiltroDaEmenda:
+    """Decide, evento a evento, se um cruzamento do clipe atual é veículo novo.
+
+    Por SUP-053 de `acompanhamento-ao-vivo`, a emenda é avaliada quando o
+    cruzamento é gerado, e não depois do clipe inteiro: quando o clipe seguinte
+    começa, os eventos do fim do anterior já são conhecidos. Os supressores são
+    os eventos **brutos** do clipe anterior (D-2), e os eventos do clipe atual
+    precisam chegar na ordem em que foram gerados (D-3).
+
+    `adjacentes` falso desliga a deduplicação inteira (AC-007.4).
+
+    **Pareamento 1 para 1:** cada evento do clipe anterior suprime no máximo um
+    do atual. Sem isso, dois carros na mesma faixa no início do clipe seguinte
+    seriam ambos engolidos por um único cruzamento anterior, e AC-007.2 quebraria
+    justamente no caso mais provável.
+    """
+
+    def __init__(
+        self,
+        *,
+        eventos_do_clipe_anterior: Iterable[Evento],
+        adjacentes: bool,
+        fps_do_clipe_anterior: float,
+        duracao_do_clipe_anterior: float,
+        config: ConfiguracaoDoProcessamento,
+    ) -> None:
+        self._janela = config.janela_de_emenda_em_segundos
+        self._tolerancia = config.tolerancia_da_assinatura
+        self._supressores: list[Assinatura] = []
+        if adjacentes:
+            limite = duracao_do_clipe_anterior - self._janela
+            # Lado esquerdo: cruzamentos nos últimos `janela` segundos do clipe
+            # anterior. Cada um pode gastar sua supressão uma única vez.
+            self._supressores = [
+                assinatura(evento)
+                for evento in eventos_do_clipe_anterior
+                if _deslocamento(evento, fps_do_clipe_anterior) >= limite
+            ]
+
+    @classmethod
+    def sem_anterior(cls) -> "FiltroDaEmenda":
+        """O filtro que aceita tudo: primeiro minuto, ou minuto depois de D-4."""
+        filtro = cls.__new__(cls)
+        filtro._janela = 0.0
+        filtro._tolerancia = 0.0
+        filtro._supressores = []
+        return filtro
+
+    def aceita(self, evento: Evento, *, fps_do_clipe_atual: float) -> bool:
+        """O cruzamento é veículo novo? Se não, consome o supressor dele."""
+        if not self._supressores:
+            return True
+        # Lado direito: só os cruzamentos dos primeiros `janela` segundos do
+        # clipe atual são candidatos a ser continuação do clipe anterior.
+        if _deslocamento(evento, fps_do_clipe_atual) > self._janela:
+            return True
+
+        candidata = assinatura(evento)
+        for posicao, supressor in enumerate(self._supressores):
+            if compativeis(supressor, candidata, tolerancia=self._tolerancia):
+                del self._supressores[posicao]
+                return False
+        return True
+
+
 def deduplicar(
     eventos_do_clipe_anterior: Iterable[Evento],
     eventos_do_clipe_atual: Iterable[Evento],
@@ -106,56 +176,18 @@ def deduplicar(
 ) -> tuple[Evento, ...]:
     """Os eventos do clipe atual que sobrevivem à emenda, na ordem recebida.
 
-    Os eventos do clipe anterior já foram aceitos quando aquele clipe foi
-    processado — eles entram aqui só como supressores. O que esta função decide
-    é quais cruzamentos do clipe **atual** são veículos novos.
-
-    `adjacentes` falso desliga a deduplicação inteira e devolve tudo (AC-007.4):
-    se houve minuto perdido entre os dois clipes, eles não se tocam no tempo e
-    nenhum cruzamento de um pode ser a continuação do outro. Quem decide a
-    adjacência é T-12, a partir do manifest.
-
-    **Pareamento 1 para 1:** cada evento do lado esquerdo suprime no máximo um
-    do lado direito. Sem isso, dois carros na mesma faixa no início do clipe
-    seguinte — mesma categoria, mesmo sentido, mesma posição — seriam ambos
-    engolidos por um único cruzamento anterior, e AC-007.2 quebraria justamente
-    no caso mais provável.
+    Laço sobre `FiltroDaEmenda`, que é a fonte de verdade das regras (D-1).
+    Os eventos do clipe anterior entram só como supressores.
     """
-    atuais = tuple(eventos_do_clipe_atual)
-    if not adjacentes:
-        return atuais
-
-    janela = config.janela_de_emenda_em_segundos
-    limite_do_clipe_anterior = duracao_do_clipe_anterior - janela
-
-    # Lado esquerdo: cruzamentos nos últimos `janela` segundos do clipe
-    # anterior. Cada um pode gastar sua supressão uma única vez.
-    supressores = [
-        assinatura(evento)
-        for evento in eventos_do_clipe_anterior
-        if _deslocamento(evento, fps_do_clipe_anterior) >= limite_do_clipe_anterior
-    ]
-    ja_usados = [False] * len(supressores)
-
-    aceitos: list[Evento] = []
-    for evento in atuais:
-        # Lado direito: só os cruzamentos dos primeiros `janela` segundos do
-        # clipe atual são candidatos a ser continuação do clipe anterior.
-        na_janela = _deslocamento(evento, fps_do_clipe_atual) <= janela
-        if not na_janela:
-            aceitos.append(evento)
-            continue
-
-        candidata = assinatura(evento)
-        for posicao, supressor in enumerate(supressores):
-            if ja_usados[posicao]:
-                continue
-            if compativeis(
-                supressor, candidata, tolerancia=config.tolerancia_da_assinatura
-            ):
-                ja_usados[posicao] = True
-                break
-        else:
-            aceitos.append(evento)
-
-    return tuple(aceitos)
+    filtro = FiltroDaEmenda(
+        eventos_do_clipe_anterior=eventos_do_clipe_anterior,
+        adjacentes=adjacentes,
+        fps_do_clipe_anterior=fps_do_clipe_anterior,
+        duracao_do_clipe_anterior=duracao_do_clipe_anterior,
+        config=config,
+    )
+    return tuple(
+        evento
+        for evento in eventos_do_clipe_atual
+        if filtro.aceita(evento, fps_do_clipe_atual=fps_do_clipe_atual)
+    )
