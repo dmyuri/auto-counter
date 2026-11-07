@@ -52,6 +52,11 @@ Critérios de aceite:
   AC-005.4 — Dado a máquina de referência e a configuração padrão, quando uma
   sessão de 15 minutos já baixada é processada, então o tempo médio por frame
   analisado é de no máximo 133 ms.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > O limite de 133 ms continua igual, mas passa a incluir a regravação do
+  > estado de progresso a cada evento aceito, que agora acontece dentro do
+  > processamento (SUP-058 da feature nova).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
 US-006 — Contar cruzamentos da linha com sentido
 Como docente responsável pelo projeto, quero que cada veículo que atravessa a
@@ -84,6 +89,11 @@ Critérios de aceite:
   mesmo sentido dentro de um clipe, quando o sistema avalia os cruzamentos, então
   apenas o primeiro deles gera evento — no máximo um evento por id de rastreio em
   cada sentido.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > O limite de um evento por id de rastreio e sentido passa a ser aplicado no
+  > momento em que o cruzamento é gerado, para que um cruzamento repetido nunca
+  > chegue à tela, sem mudar os eventos gravados (AC-016.2).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
 US-007 — Não contar duas vezes na emenda entre clipes
 Como docente responsável pelo projeto, quero que um veículo que passa bem no
@@ -95,10 +105,21 @@ Critérios de aceite:
   cruzamento de assinatura compatível nos primeiros 2 s do clipe imediatamente
   seguinte, quando o segundo clipe é processado, então o segundo cruzamento não
   gera novo evento.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > A deduplicação passa a ser avaliada evento a evento, quando o cruzamento do
+  > início do clipe é gerado, contra os eventos já conhecidos do fim do clipe
+  > anterior, e não depois do clipe inteiro, sem mudar os eventos gravados
+  > (AC-016.3 e SUP-053).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
   AC-007.2 — Dado dois veículos distintos, um cruzando no fim de um clipe e outro
   cruzando no início do clipe seguinte com assinatura diferente, quando os clipes
   são processados, então os dois eventos são registrados.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > Os dois eventos passam a ser publicados no progresso no momento em que cada
+  > cruzamento é gerado, pela mesma avaliação evento a evento de AC-007.1, sem
+  > mudar os eventos gravados (AC-016.2 e SUP-053).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
   AC-007.3 — Dado a passagem de um clipe para o seguinte, quando o próximo clipe
   começa a ser processado, então o estado do rastreador é reiniciado e nenhum id
