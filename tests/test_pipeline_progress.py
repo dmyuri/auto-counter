@@ -10,16 +10,19 @@ teste e "morto" é um filho que já terminou. Nada aqui toca a rede.
 import os
 import subprocess
 import sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import psutil
 import pytest
 
 from auto_counter.capture.status import StatusDaSessao
+from auto_counter.counting.config import Categoria
 from auto_counter.pipeline.lock import NOME_DA_TRAVA, adquirir_trava
 from auto_counter.pipeline.progress import (
     MENSAGEM_PROCESSO_MORREU,
+    Quantidades,
     Situacao,
+    formatar_tempo,
     ler_progresso,
 )
 from auto_counter.pipeline.state import AnotadorDoEstado, Fase
@@ -321,3 +324,208 @@ def test_ler_progresso_nao_abre_o_manifest(tmp_path, monkeypatch):
 
     with trava_do_run(tmp_path):
         assert ler_progresso(tmp_path).situacao is Situacao.EM_ANDAMENTO
+
+
+def anotador_com_relogio(data_dir, *, fim=None) -> AnotadorDoEstado:
+    return AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        **({} if fim is None else {"agora": lambda: fim}),
+    )
+
+
+def em_processamento(data_dir, *, fim=None) -> AnotadorDoEstado:
+    a = anotador_com_relogio(data_dir, fim=fim)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.processamento_iniciado(ID_SESSAO, 1)
+    return a
+
+
+def test_AC_016_1_inicio_do_processamento_mostra_cinco_quantidades_em_zero(tmp_path):
+    em_processamento(tmp_path)
+
+    with trava_do_run(tmp_path):
+        quantidades = ler_progresso(tmp_path).andamento.quantidades
+
+    assert quantidades == Quantidades(carro=0, onibus=0, caminhao=0, moto=0)
+    assert quantidades.total == 0
+
+
+def test_AC_016_2_total_e_a_soma_das_quatro_categorias(tmp_path):
+    a = em_processamento(tmp_path)
+    for categoria in (Categoria.CARRO, Categoria.CARRO, Categoria.MOTO, Categoria.ONIBUS):
+        a.evento_aceito(1, categoria)
+
+    with trava_do_run(tmp_path):
+        quantidades = ler_progresso(tmp_path).andamento.quantidades
+
+    assert (quantidades.carro, quantidades.onibus) == (2, 1)
+    assert (quantidades.caminhao, quantidades.moto) == (0, 1)
+    assert quantidades.total == 4
+
+
+def test_AC_016_5_captura_nao_tem_quantidades(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.fase is Fase.CAPTURA
+    assert andamento.quantidades is None
+
+
+def test_AC_016_7_reabrir_le_as_mesmas_quantidades(tmp_path):
+    a = em_processamento(tmp_path)
+    a.evento_aceito(1, Categoria.CAMINHAO)
+
+    with trava_do_run(tmp_path):
+        primeiro = ler_progresso(tmp_path, agora=INICIO).andamento.quantidades
+        segundo = ler_progresso(tmp_path, agora=INICIO).andamento.quantidades
+
+    assert primeiro == segundo
+    assert segundo.caminhao == 1
+
+
+def test_AC_017_1_tempo_decorrido_e_agora_menos_inicio_truncado(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(
+            tmp_path, agora=INICIO + timedelta(seconds=75, milliseconds=900)
+        ).andamento
+
+    assert andamento.tempo_decorrido == 75
+    assert formatar_tempo(andamento.tempo_decorrido) == "01:15"
+
+
+def test_AC_017_1_relogio_que_recuou_nao_da_tempo_negativo(tmp_path):
+    anotador_com_relogio(tmp_path).iniciar()
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(tmp_path, agora=INICIO - timedelta(seconds=5)).andamento
+
+    assert andamento.tempo_decorrido == 0
+
+
+def test_AC_017_2_tempo_nao_zera_na_passagem_para_o_processamento(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    agora = INICIO + timedelta(seconds=90)
+
+    with trava_do_run(tmp_path):
+        na_captura = ler_progresso(tmp_path, agora=agora).andamento
+        a.processamento_iniciado(ID_SESSAO, 1)
+        no_processamento = ler_progresso(tmp_path, agora=agora).andamento
+
+    assert na_captura.fase is Fase.CAPTURA
+    assert no_processamento.fase is Fase.PROCESSAMENTO
+    assert na_captura.tempo_decorrido == no_processamento.tempo_decorrido == 90
+
+
+def test_AC_017_3_duas_consultas_diferem_do_intervalo_entre_elas(tmp_path):
+    em_processamento(tmp_path)
+
+    with trava_do_run(tmp_path):
+        t1 = ler_progresso(tmp_path, agora=INICIO + timedelta(seconds=10)).andamento
+        t2 = ler_progresso(
+            tmp_path, agora=INICIO + timedelta(seconds=10, milliseconds=2500)
+        ).andamento
+
+    assert abs((t2.tempo_decorrido - t1.tempo_decorrido) - 2.5) <= 1
+
+
+def test_AC_017_4_tempo_conta_do_inicio_e_nao_da_reabertura(tmp_path):
+    em_processamento(tmp_path)
+    agora = INICIO + timedelta(minutes=7, seconds=3)
+
+    with trava_do_run(tmp_path):
+        antes_de_fechar = ler_progresso(tmp_path, agora=agora).andamento
+        # "Reabrir": leitor novo, sem nada em memória.
+        reaberto = ler_progresso(tmp_path, agora=agora).andamento
+
+    assert reaberto.tempo_decorrido == antes_de_fechar.tempo_decorrido == 423
+
+
+def test_formatar_tempo_minutos_passam_de_59():
+    assert formatar_tempo(0) == "00:00"
+    assert formatar_tempo(59) == "00:59"
+    assert formatar_tempo(60) == "01:00"
+    assert formatar_tempo(4503) == "75:03"
+
+
+def test_AC_018_1_concluida_traz_quantidades_finais_e_tempo_total(tmp_path):
+    fim = INICIO + timedelta(minutes=17, seconds=5, milliseconds=800)
+    a = em_processamento(tmp_path, fim=fim)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.ONIBUS)
+    a.minuto_processado()
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA")
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.quantidades == Quantidades(carro=2, onibus=1, caminhao=0, moto=0)
+    assert resultado.quantidades.total == 3
+    assert resultado.tempo_total == 17 * 60 + 5
+
+
+def test_AC_018_2_tempo_total_nao_avanca_entre_consultas(tmp_path):
+    fim = INICIO + timedelta(minutes=3)
+    a = em_processamento(tmp_path, fim=fim)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA")
+
+    primeira = ler_progresso(tmp_path, agora=fim + timedelta(seconds=1)).resultado
+    segunda = ler_progresso(tmp_path, agora=fim + timedelta(hours=5)).resultado
+
+    assert primeira.tempo_total == segunda.tempo_total == 180
+
+
+@pytest.mark.parametrize(
+    "fase",
+    [Fase.PROCESSAMENTO_CANCELADO, Fase.SEM_PLANILHA, Fase.FALHOU],
+)
+def test_AC_018_3_cancelada_sem_planilha_e_falhou_trazem_tempo_e_nenhuma_quantidade(
+    tmp_path, fase
+):
+    fim = INICIO + timedelta(minutes=2, seconds=30)
+    a = em_processamento(tmp_path, fim=fim)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.terminar(fase, id_sessao=ID_SESSAO, status="COMPLETA", mensagem="x")
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is fase
+    assert resultado.tempo_total == 150
+    assert resultado.quantidades is None
+
+
+def test_AC_018_4_processo_morto_nao_traz_quantidades_nem_tempo(tmp_path):
+    pid, criado_em = pid_morto()
+    a = AnotadorDoEstado(
+        tmp_path,
+        pid=pid,
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.processamento_iniciado(ID_SESSAO, 1)
+    a.evento_aceito(1, Categoria.CARRO)
+    grava_trava(tmp_path, pid=pid, criado_em=criado_em)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.mensagem == MENSAGEM_PROCESSO_MORREU
+    assert resultado.quantidades is None
+    assert resultado.tempo_total is None

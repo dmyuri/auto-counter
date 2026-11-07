@@ -12,13 +12,19 @@ faz o `os.replace` da captura falhar.
 
 Nada fica em memória entre duas chamadas: o progresso é reencontrado só a partir
 do disco (AC-012.4), por isso reabrir a interface mostra a mesma sessão.
+
+Por `acompanhamento-ao-vivo`, a leitura também devolve as quantidades por
+categoria e o tempo da sessão, já prontos para exibir: a interface só formata o
+que recebe daqui (SUP-038, SUP-058). O relógio é injetável em `agora` (D-7).
 """
 
 import sqlite3
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
 
+from auto_counter.counting.config import Categoria
 from auto_counter.export.format import linha_de_aviso
 from auto_counter.pipeline.lock import (
     InfoDaTrava,
@@ -42,6 +48,46 @@ class Situacao(Enum):
 
 
 @dataclass(frozen=True)
+class Quantidades:
+    """Veículos contados por categoria; o total é a soma delas (SUP-054)."""
+
+    carro: int
+    onibus: int
+    caminhao: int
+    moto: int
+
+    @property
+    def total(self) -> int:
+        return self.carro + self.onibus + self.caminhao + self.moto
+
+
+def formatar_tempo(segundos: int) -> str:
+    """MM:SS, com os minutos passando de 59 sem virar hora (SUP-057)."""
+    minutos, resto = divmod(int(segundos), 60)
+    return f"{minutos:02d}:{resto:02d}"
+
+
+def _quantidades(estado: EstadoDaSessao) -> Quantidades | None:
+    if estado.quantidades is None:
+        return None
+    return Quantidades(
+        carro=estado.quantidades[Categoria.CARRO.value],
+        onibus=estado.quantidades[Categoria.ONIBUS.value],
+        caminhao=estado.quantidades[Categoria.CAMINHAO.value],
+        moto=estado.quantidades[Categoria.MOTO.value],
+    )
+
+
+def _agora() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _segundos(inicio: datetime, fim: datetime) -> int:
+    """Segundos inteiros de `inicio` a `fim`, truncados e nunca negativos."""
+    return max(0, int((fim - inicio).total_seconds()))
+
+
+@dataclass(frozen=True)
 class Andamento:
     """O progresso de uma sessão que a interface sabe acompanhar."""
 
@@ -53,6 +99,10 @@ class Andamento:
     processados: int
     a_processar: int
     pode_encerrar: bool
+    quantidades: Quantidades | None
+    """`None` na captura (SUP-055); zeros a partir do processamento."""
+    tempo_decorrido: int
+    """Segundos desde T0, sem voltar a zero na troca de fase (AC-017.2)."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +114,10 @@ class Resultado:
     aviso: str | None
     planilha: Path | None
     mensagem: str | None
+    quantidades: Quantidades | None = None
+    """Só na sessão concluída (SUP-060)."""
+    tempo_total: int | None = None
+    """`None` sem instante de término: processo morto ou estado antigo."""
 
 
 @dataclass(frozen=True)
@@ -74,7 +128,7 @@ class Progresso:
     resultado: Resultado | None = None
 
 
-def _andamento(estado: EstadoDaSessao) -> Andamento:
+def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
     return Andamento(
         nome_camera=estado.nome_camera,
         fase=estado.fase,
@@ -84,6 +138,8 @@ def _andamento(estado: EstadoDaSessao) -> Andamento:
         processados=estado.minutos_processados,
         a_processar=estado.minutos_a_processar,
         pode_encerrar=not estado.fase.terminal,
+        quantidades=_quantidades(estado),
+        tempo_decorrido=_segundos(estado.iniciada_em, agora),
     )
 
 
@@ -113,6 +169,12 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             mensagem=MENSAGEM_PROCESSO_MORREU,
         )
 
+    tempo_total = (
+        None
+        if estado.terminada_em is None
+        else _segundos(estado.iniciada_em, estado.terminada_em)
+    )
+
     if estado.fase is not Fase.CONCLUIDA:
         return Resultado(
             fase=estado.fase,
@@ -120,6 +182,7 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             aviso=None,
             planilha=None,
             mensagem=estado.mensagem,
+            tempo_total=tempo_total,
         )
 
     sessao = _sessao_do_banco(data_dir, estado.id_sessao)
@@ -140,11 +203,13 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         aviso=aviso,
         planilha=planilha,
         mensagem=mensagem,
+        quantidades=_quantidades(estado),
+        tempo_total=tempo_total,
     )
 
 
 def _com_trava_viva(
-    info: InfoDaTrava, estado: EstadoDaSessao | None
+    info: InfoDaTrava, estado: EstadoDaSessao | None, agora: datetime
 ) -> Progresso | None:
     """O progresso de uma sessão em curso, ou `None` se o estado já terminou."""
     recusa = mensagem_de_sessao_em_andamento(info)
@@ -159,18 +224,23 @@ def _com_trava_viva(
         # O processo terminou de gravar o desfecho e ainda não soltou a trava.
         return None
     return Progresso(
-        Situacao.EM_ANDAMENTO, mensagem_de_recusa=recusa, andamento=_andamento(estado)
+        Situacao.EM_ANDAMENTO, mensagem_de_recusa=recusa, andamento=_andamento(estado, agora)
     )
 
 
-def ler_progresso(data_dir: str | Path) -> Progresso:
-    """O que a interface deve mostrar agora, lido só do disco."""
+def ler_progresso(data_dir: str | Path, *, agora: datetime | None = None) -> Progresso:
+    """O que a interface deve mostrar agora, lido só do disco.
+
+    `agora` é o relógio da leitura (D-7), padrão UTC atual. Só o tempo
+    decorrido depende dele; o tempo total vem do instante de término gravado.
+    """
     data_dir = Path(data_dir)
+    agora = _agora() if agora is None else agora
     estado = ler_estado(data_dir)
 
     info = ler_trava(data_dir)
     if info is not None:
-        progresso = _com_trava_viva(info, estado)
+        progresso = _com_trava_viva(info, estado, agora)
         if progresso is not None:
             return progresso
 
