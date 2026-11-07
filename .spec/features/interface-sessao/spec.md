@@ -30,13 +30,27 @@ Critérios de aceite:
   AC-011.1 — Dado um registro com N câmeras válidas, quando a interface é aberta,
   então ela apresenta exatamente essas N câmeras identificadas pelo nome do local
   e não oferece nenhum campo para digitar id, URL ou endereço de câmera.
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > As câmeras passam a aparecer em cartões com id, nome do local e imagem de
+  > prévia, mantida a proibição de campo para digitar id, URL ou endereço
+  > (AC-020.1 e AC-020.2).
+  > Ver `.spec/features/layout-interface/spec.md`.
 
   AC-011.2 — Dado a interface aberta, quando o usuário informa a duração, então
   apenas valores inteiros de 1 a 15 minutos são aceitos para iniciar a sessão.
+  > **Alterado por:** feature `upload-videos`, em 2026-11-07.
+  > A duração de 1 a 15 minutos passa a valer só para a fonte "Câmera ao vivo",
+  > e no upload ela não é escolhida, valendo o limite de 15 min de duração
+  > somada dos vídeos (AC-026.2 e AC-027.11).
+  > Ver `.spec/features/upload-videos/spec.md`.
 
   AC-011.3 — Dado um registro sem nenhuma câmera válida, quando a interface é
   aberta, então ela informa que não há câmera disponível e o comando de iniciar
   sessão fica indisponível.
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > O critério continua valendo e passa a ser detalhado para os cartões em
+  > AC-020.6, que acrescenta que nenhum cartão é exibido.
+  > Ver `.spec/features/layout-interface/spec.md`.
 
   AC-011.4 — Dado a linha de comando com uma câmera e uma duração válidas, quando
   o comando de sessão é executado, então o pipeline completo roda até a geração
@@ -61,6 +75,17 @@ Critérios de aceite:
   > (AC-016.1 a AC-016.8 e AC-017.1 a AC-017.3).
   > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > O progresso da fase atual passa a vir acompanhado do percentual concluído,
+  > do tempo estimado até o fim da sessão, da participação de cada categoria e
+  > da taxa em veíc/min (AC-022.2 a AC-022.6).
+  > Ver `.spec/features/layout-interface/spec.md`.
+
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > A sessão de upload tem uma fase só, a de processamento, com o estado de
+  > cada vídeo enviado (AC-028.1 e AC-028.3).
+  > Ver `.spec/features/processamento-upload/spec.md`.
+
   AC-012.3 — Dado uma sessão concluída, quando o usuário acessa o resultado,
   então a interface exibe o status da sessão e oferece o download do XLSX
   correspondente àquela sessão.
@@ -69,6 +94,18 @@ Critérios de aceite:
   > por categoria, o total e o tempo total da sessão, sem mudar o status nem o
   > download (AC-018.1 e AC-018.2).
   > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
+
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > O resultado passa para o painel "Sessão finalizada", com o cartão da
+  > planilha mostrando o número de registros e a marca "✓ Baixado" depois do
+  > download (AC-023.2 e AC-023.3).
+  > Ver `.spec/features/layout-interface/spec.md`.
+
+  > **Alterado por:** feature `download-clipes`, em 2026-11-07.
+  > Com a opção "Manter clipes de vídeo" ligada, o resultado da sessão
+  > concluída passa a listar os clipes para download individual e em `.zip`
+  > (AC-025.1 a AC-025.4).
+  > Ver `.spec/features/download-clipes/spec.md`.
 
   AC-012.4 — Dado uma sessão em andamento, quando a interface é fechada e aberta
   de novo, então a sessão continua em andamento, o progresso dela é reencontrado
@@ -80,6 +117,12 @@ Critérios de aceite:
   > (AC-016.7 e AC-017.4).
   > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > A ação explícita passa a ser o botão "Parar antecipadamente", com
+  > confirmação, e reabrir a interface reencontra também o último resultado,
+  > mesmo depois de "Nova sessão" (AC-023.1 e AC-023.7).
+  > Ver `.spec/features/layout-interface/spec.md`.
+
   AC-012.5 — Dado uma sessão em processamento, quando o usuário a encerra
   explicitamente, então a contagem para, nenhum resultado de contagem é gravado,
   os vídeos da sessão permanecem em disco para reprocessamento e a interface
@@ -90,6 +133,11 @@ Critérios de aceite:
   > vistas durante o processamento deixam de aparecer (AC-018.3).
   > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > O aviso de processamento cancelado passa a aparecer no painel de
+  > resultados, sem cartão de planilha (AC-023.4).
+  > Ver `.spec/features/layout-interface/spec.md`.
+
   AC-012.6 — Dado uma sessão encerrada em que nenhum clipe pôde ser processado,
   quando o usuário acessa o resultado, então a interface exibe o status da sessão
   e informa que não há planilha, sem oferecer download.
@@ -97,6 +145,11 @@ Critérios de aceite:
   > O resultado da sessão sem planilha passa a exibir o tempo total da sessão,
   > sem nenhuma quantidade de veículos e sem download (AC-018.3).
   > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
+
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > O aviso de que não há planilha passa a aparecer no painel de resultados,
+  > sem cartão de planilha (AC-023.4).
+  > Ver `.spec/features/layout-interface/spec.md`.
 
 US-013 — Uma sessão por vez
 Como integrante do projeto de extensão, quero que o sistema recuse iniciar uma
@@ -107,10 +160,23 @@ Critérios de aceite:
   AC-013.1 — Dado uma sessão em andamento, quando alguém tenta iniciar outra,
   então a segunda é recusada com mensagem que informa a câmera e o horário de
   início da sessão em curso, e a sessão em andamento não é afetada.
+  > **Alterado por:** feature `upload-videos`, em 2026-11-07.
+  > Com sessão em andamento, a área de envio de vídeos e os botões de remover
+  > também ficam indisponíveis (AC-026.5).
+  > Ver `.spec/features/upload-videos/spec.md`.
+
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > A recusa passa a valer também entre sessão ao vivo e sessão de upload,
+  > inclusive pelo comando `session upload` (AC-028.2 e SUP-098).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-013.2 — Dado que o processo da sessão anterior terminou ou foi encerrado
   sem liberar a trava, quando uma nova sessão é iniciada, então a trava órfã é
   ignorada e a nova sessão começa normalmente.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > A trava órfã passa a ser ignorada também ao iniciar uma sessão de upload,
+  > que pega a mesma trava pelo comando `session upload` (SUP-098).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
 ## Fora de escopo
 
