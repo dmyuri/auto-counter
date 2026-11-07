@@ -36,6 +36,7 @@ import supervision as sv
 from auto_counter.cameras.model import Camera, Linha, Ponto
 from auto_counter.counting.clip import processar_clipe
 from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
+from auto_counter.counting.sampling import MOTIVO_NAO_ABRE, FrameAmostrado
 
 LARGURA = 128
 ALTURA = 48
@@ -165,6 +166,7 @@ def processa(
     amostragem: int = 3,
     id_do_bytetrack: int = 7,
     inicio_do_clipe: datetime = INICIO_DO_CLIPE,
+    ao_gerar_evento=None,
 ):
     """Roda `processar_clipe` com os dublês do teste."""
     return processar_clipe(
@@ -175,6 +177,7 @@ def processa(
         detector=detector,
         config=ConfiguracaoDoProcessamento(amostragem=amostragem),
         fabrica_de_bytetrack=lambda: ByteTrackDuble(id_do_bytetrack),
+        **({} if ao_gerar_evento is None else {"ao_gerar_evento": ao_gerar_evento}),
     )
 
 
@@ -302,3 +305,87 @@ def test_clipe_ausente_ou_ilegivel_devolve_resultado_com_motivo_e_sem_excecao(tm
     corrompido = processa(corrompido_no_disco, DetectorDuble([]))
     assert corrompido.eventos == ()
     assert corrompido.motivo
+
+
+# Ida e volta sobre a linha: dois cruzamentos, em sentidos e frames diferentes.
+DOIS_CRUZAMENTOS = [(140, 100), (60, 100), (60, 100), (140, 100), (140, 100)]
+
+
+def test_AC_016_2_gancho_recebe_cada_evento_na_ordem_e_antes_do_fim_do_clipe(tmp_path):
+    """O evento sai do clipe no momento em que é gerado, não só no resultado.
+
+    O gancho anota quantos frames o detector já tinha recebido quando cada
+    evento chegou: tem de ser menos que o total do clipe.
+    """
+    caminho = escreve_video(tmp_path / "clipe.mp4", 31)
+    detector = DetectorDuble(DOIS_CRUZAMENTOS)
+    chegadas: list[tuple[object, float, int]] = []
+
+    def gancho(evento, fps):
+        chegadas.append((evento, fps, len(detector.indices_recebidos)))
+
+    resultado = processa(caminho, detector, ao_gerar_evento=gancho)
+
+    assert len(resultado.eventos) == 2
+    assert [e for e, _, _ in chegadas] == list(resultado.eventos)
+    assert all(fps == resultado.fps for _, fps, _ in chegadas)
+    total_analisado = len(detector.indices_recebidos)
+    assert all(vistos < total_analisado for _, _, vistos in chegadas)
+    assert chegadas[0][2] < chegadas[1][2]
+
+
+def test_AC_016_2_sem_gancho_o_resultado_do_clipe_e_identico(tmp_path):
+    caminho = escreve_video(tmp_path / "clipe.mp4", 31)
+
+    sem = processa(caminho, DetectorDuble(DOIS_CRUZAMENTOS))
+    com = processa(
+        caminho,
+        DetectorDuble(DOIS_CRUZAMENTOS),
+        ao_gerar_evento=lambda evento, fps: None,
+    )
+
+    assert sem == com
+
+
+class AmostragemQueFalhaNoMeio:
+    """Dublê de `AmostragemDoClipe`: entrega alguns frames e então falha.
+
+    Preenche `motivo` ao fim, como o `except` de `sampling.py`.
+    """
+
+    def __init__(self, quadros: int):
+        self._quadros = quadros
+        self.fps: float | None = FPS
+        self.total_de_frames = 0
+        self.motivo: str | None = None
+
+    def __iter__(self):
+        for indice in range(self._quadros):
+            self.total_de_frames = indice + 1
+            yield FrameAmostrado(indice=indice, imagem=_quadro_marcado(indice))
+        self.motivo = MOTIVO_NAO_ABRE
+
+
+def test_AC_016_8_clipe_que_falha_no_meio_chama_o_gancho_e_devolve_sem_eventos(
+    tmp_path, monkeypatch
+):
+    """O gancho já foi chamado quando a leitura falha; o resultado, não tem eventos.
+
+    Quem desconta o minuto é a sessão (D-4); o clipe só mantém o contrato.
+    """
+    monkeypatch.setattr(
+        "auto_counter.counting.clip.frames_amostrados",
+        lambda caminho, amostragem: AmostragemQueFalhaNoMeio(6),
+    )
+    detector = DetectorDuble([(140, 100), (60, 100), (60, 100)])
+    recebidos = []
+
+    resultado = processa(
+        tmp_path / "qualquer.mp4",
+        detector,
+        ao_gerar_evento=lambda evento, fps: recebidos.append(evento),
+    )
+
+    assert len(recebidos) == 1
+    assert resultado.eventos == ()
+    assert resultado.motivo == MOTIVO_NAO_ABRE

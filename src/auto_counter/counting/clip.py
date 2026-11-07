@@ -85,6 +85,7 @@ def processar_clipe(
     detector: DetectorDoClipe,
     config: ConfiguracaoDoProcessamento,
     fabrica_de_bytetrack: Callable[[], RastreadorDoSupervision] = criar_bytetrack,
+    ao_gerar_evento: Callable[[Evento, float], None] | None = None,
 ) -> ResultadoDoClipe:
     """Detecta, rastreia e conta os cruzamentos de **um** clipe.
 
@@ -96,6 +97,12 @@ def processar_clipe(
     ele precisa do `fps` do arquivo —, por isso nasce no primeiro frame
     analisado. Clipe que não rende frame nenhum nunca chega a ter avaliador, e
     sai por D-4.
+
+    `ao_gerar_evento`, se dado, é chamado uma vez por evento, na ordem em que o
+    avaliador os devolve e logo depois do frame que o gerou, com o `fps` do clipe
+    (AC-016.2 de `acompanhamento-ao-vivo`). Não muda o resultado: se a leitura
+    falhar no meio (D-4), o gancho já foi chamado e o resultado continua sem
+    eventos — quem desconta o minuto é o chamador.
     """
     rastreador = rastreador_para_o_clipe(minuto, fabrica_de_bytetrack)
     amostragem = frames_amostrados(caminho, config.amostragem)
@@ -125,7 +132,10 @@ def processar_clipe(
         analisados += 1
         deteccoes = detector.detectar(amostra.imagem)
         rastreadas = rastreador.atualizar(deteccoes)
-        eventos.extend(avaliador.avaliar(rastreadas, indice_do_frame=amostra.indice))
+        for evento in avaliador.avaliar(rastreadas, indice_do_frame=amostra.indice):
+            eventos.append(evento)
+            if ao_gerar_evento is not None:
+                ao_gerar_evento(evento, fps)
 
     if amostragem.motivo is not None:
         # D-4: o clipe não abriu ou não tinha frame legível. O que porventura
