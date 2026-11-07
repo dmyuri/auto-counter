@@ -18,7 +18,7 @@ Câmera do MVP: **000013** — 1280×720 a 30 fps, H.264, clipes de 59,93 s e ~3
 - Framework: Typer (CLI) + Streamlit (interface local, sem servidor dedicado)
 - Banco: SQLite 3 (módulo `sqlite3` da stdlib), arquivo único
 - Export: XLSX via `openpyxl` (CSV, JSON e PDF estão fora do escopo desta versão)
-- Testes: pytest (marcadores `accuracy` para a validação contra ground truth e `perf` para o orçamento de tempo por frame) + `audit.py` como gate de rastreabilidade
+- Testes: pytest (marcadores `accuracy` para a validação contra ground truth e `perf` para o orçamento de tempo por frame) + `audit.py` como relatório de rastreabilidade (informativo)
 - Gerenciador de pacotes: uv (`pyproject.toml` + `uv.lock`)
 
 Componentes de visão computacional:
@@ -45,7 +45,9 @@ copy .env.example .env
 #    edite .env com os valores reais
 ```
 
-O `.env` guarda a base URL do servidor de vídeo da NitTrans e o diretório onde ficam clipes e banco. Nenhum endereço tem valor padrão embutido no código: sem a variável definida, o sistema falha com erro explícito em vez de tentar adivinhar.
+O `.env` guarda a base URL do servidor de vídeo da NitTrans e o diretório onde ficam clipes e banco (`AUTO_COUNTER_DATA_DIR`). Nenhum endereço tem valor padrão embutido no código: sem a variável definida, o sistema falha com erro explícito em vez de tentar adivinhar.
+
+> **Windows:** escreva o caminho **sem aspas** (`AUTO_COUNTER_DATA_DIR=C:\Repositories\auto-counter\data`) ou com barras normais (`"C:/Repositories/auto-counter/data"`). Entre aspas duplas, o `\a` de `\auto-counter` é lido como caractere de controle e o caminho fica inválido. Prefira caminho absoluto.
 
 ```powershell
 # 3. Ver os comandos disponíveis nesta versão
@@ -55,9 +57,30 @@ uv run auto-counter --help
 uv run auto-counter ui
 ```
 
+### Interface
+
+`uv run auto-counter ui` abre a interface em `http://127.0.0.1:8501` (use `--port` para mudar a porta e `--config-dir` para outro registro de câmeras). Nela você:
+
+1. escolhe a câmera pelo nome do local e a duração (1 a 15 minutos, padrão 15) e clica em **Iniciar sessão**;
+2. acompanha a fase (captura ou processamento), os minutos capturados do total e os perdidos, atualizados sozinhos a cada 2 s;
+3. pode **Encerrar sessão** (com confirmação): na captura, os minutos já capturados são processados; no processamento, a contagem é cancelada, nada é gravado e os vídeos são mantidos para `session process`;
+4. ao fim, vê o status e baixa a planilha XLSX. Sessão sem nenhum clipe processável termina sem planilha, só com o status.
+
+A sessão roda em um processo separado, então fechar a aba ou parar o `ui` não a interrompe; ao reabrir a interface, ela reencontra a sessão em andamento. O estado fica em `AUTO_COUNTER_DATA_DIR` (`sessao.lock`, `sessao_atual.json`, `sessao.parar`) e o log de cada execução em `logs/run-<carimbo>.log`.
+
+Só uma sessão roda por vez, seja disparada pela interface ou pelo terminal (`run`, `capture` ou `process`). Com outra em andamento, o botão fica indisponível e a mensagem diz qual câmera e desde quando.
+
 ### Gerar a planilha de uma sessão
 
-O fluxo completo, pela linha de comando, tem três passos:
+Num único comando, da câmera ao XLSX (é o que a interface dispara):
+
+```powershell
+uv run auto-counter session run 000013 --minutes 3          # --keep-clips preserva os vídeos
+```
+
+Ctrl+C na captura encerra pela duração real e segue para o processamento; no processamento, cancela sem gravar nada.
+
+Ou, passo a passo, pela linha de comando:
 
 ```powershell
 # 1. Captura (1 a 15 minutos)
@@ -74,7 +97,7 @@ uv run auto-counter session export <ID_SESSAO>
 
 Os subcomandos concretos são definidos pelas specs de feature em `.spec/features/`; `--help` sempre lista o que existe na versão instalada.
 
-A interface roda em localhost, sem autenticação, e aceita uma sessão por vez — o sistema é monousuário por decisão de escopo. Fechar o navegador não encerra uma sessão em andamento.
+A interface escuta apenas em 127.0.0.1, sem autenticação, e aceita uma sessão por vez — o sistema é monousuário por decisão de escopo. Não é feita para ser exposta em servidor.
 
 Cada câmera tem ID estável e configuração própria (posição da linha de contagem e rótulos dos dois sentidos). Calibração de uma câmera nunca é reaproveitada em outra, e a lista é pré-definida: o usuário seleciona, não cadastra.
 
@@ -110,7 +133,7 @@ uv run pytest --junitxml=report.xml
 python audit.py
 ```
 
-O gate cruza os critérios de aceite ativos das specs com os testes que passaram no `report.xml` e sai com código diferente de zero se algum AC estiver sem prova, se houver teste órfão ou se restar pendência em aberto na spec. Usa apenas a stdlib — se não houver `python` no PATH, use `uv run python audit.py`.
+O `audit.py` cruza os critérios de aceite ativos das specs com os testes que passaram no `report.xml` e aponta AC sem prova, teste órfão e pendência em aberto na spec. É um relatório de rastreabilidade: o resultado dele não define se uma feature está pronta. Usa apenas a stdlib — se não houver `python` no PATH, use `uv run python audit.py`.
 
 ### Ground truth
 
@@ -128,7 +151,7 @@ tests/ground_truth/
     └── noturno.mp4
 ```
 
-Os **CSVs e o manifest são versionados**: são poucos KB e representam horas de trabalho que não dá para refazer, já que a URL não guarda histórico para recontar. Os **vídeos ficam fora do git** (~32 MB cada), isolados em `clipes/` — a separação é por diretório e não por extensão, para que nenhuma regra de vídeo varra junto as fixtures. Sem os vídeos, os testes marcados com `accuracy` são pulados com aviso que nomeia o clipe ausente — e como o `audit.py` trata teste pulado igual a teste que falhou, o gate reprova em vez de passar em silêncio.
+Os **CSVs e o manifest são versionados**: são poucos KB e representam horas de trabalho que não dá para refazer, já que a URL não guarda histórico para recontar. Os **vídeos ficam fora do git** (~32 MB cada), isolados em `clipes/` — a separação é por diretório e não por extensão, para que nenhuma regra de vídeo varra junto as fixtures. Sem os vídeos, os testes marcados com `accuracy` são pulados com aviso que nomeia o clipe ausente — e o `audit.py` trata teste pulado como teste sem prova, então o relatório acusa a falta em vez de passar em silêncio.
 
 Um clipe extra de chuva, se houver oportunidade de coletá-lo, entra como mais um par `chuva.csv` + `clipes/chuva.mp4`: ele é medido e reportado, mas não pode reprovar a validação.
 
