@@ -10,11 +10,13 @@ Critérios cobertos, de `.spec/features/interface-sessao/spec.md`:
 Nada aqui toca a rede nem grava fora de `tmp_path`.
 """
 
+import json
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
+from auto_counter.counting.config import Categoria
 from auto_counter.pipeline import state
 from auto_counter.pipeline.state import (
     NOME_DO_ESTADO,
@@ -186,3 +188,148 @@ def test_o_instante_e_gravado_em_utc_com_fuso_explicito(tmp_path):
     bruto = (tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8")
     assert "2026-09-07T11:00:00+00:00" in bruto
     assert ler_estado(tmp_path).iniciada_em == INICIO
+
+
+ZERADAS = {"CARRO": 0, "ONIBUS": 0, "CAMINHAO": 0, "MOTO": 0}
+"""As chaves são o `.value` de `Categoria`, sem tradução (D-4)."""
+
+
+def anotador_em_processamento(data_dir, **extra) -> AnotadorDoEstado:
+    a = anotador_com_relogio(data_dir, **extra)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.processamento_iniciado("000013-20260907T110000Z", 2)
+    return a
+
+
+def anotador_com_relogio(data_dir, *, agora=None, **extra) -> AnotadorDoEstado:
+    return AnotadorDoEstado(
+        data_dir,
+        pid=4242,
+        id_camera="000013",
+        nome_camera="Praça Renascença",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        **({} if agora is None else {"agora": agora}),
+    )
+
+
+def test_AC_016_1_processamento_iniciado_grava_as_quatro_categorias_em_zero(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    a.processamento_iniciado("000013-20260907T110000Z", 1)
+
+    assert ler_estado(tmp_path).quantidades == ZERADAS
+
+
+def test_AC_016_1_captura_nao_grava_quantidades(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    assert ler_estado(tmp_path).quantidades is None
+    bruto = json.loads((tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8"))
+    assert bruto["quantidades"] is None
+    assert bruto["terminada_em"] is None
+
+
+def test_AC_016_7_quantidades_sao_relidas_do_disco_por_outro_leitor(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.ONIBUS)
+    a.evento_aceito(1, Categoria.CAMINHAO)
+    a.evento_aceito(1, Categoria.MOTO)
+
+    # Leitor novo, sem nada em memória: só o que está em disco.
+    assert ler_estado(tmp_path).quantidades == {
+        "CARRO": 2,
+        "ONIBUS": 1,
+        "CAMINHAO": 1,
+        "MOTO": 1,
+    }
+
+
+def test_AC_016_8_minuto_descartado_volta_ao_valor_de_antes_do_minuto(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.MOTO)
+    a.minuto_processado()
+    antes_do_minuto_2 = ler_estado(tmp_path).quantidades
+
+    a.evento_aceito(2, Categoria.CARRO)
+    a.evento_aceito(2, Categoria.CARRO)
+    a.evento_aceito(2, Categoria.CAMINHAO)
+    assert ler_estado(tmp_path).quantidades != antes_do_minuto_2
+    a.minuto_descartado(2)
+
+    assert ler_estado(tmp_path).quantidades == antes_do_minuto_2
+    assert antes_do_minuto_2 == {"CARRO": 1, "ONIBUS": 0, "CAMINHAO": 0, "MOTO": 1}
+
+
+def test_AC_016_8_minuto_ja_processado_nao_e_descontado(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.minuto_processado()
+
+    a.minuto_descartado(1)
+
+    assert ler_estado(tmp_path).quantidades["CARRO"] == 1
+
+
+@pytest.mark.parametrize(
+    "fase",
+    [
+        Fase.CONCLUIDA,
+        Fase.SEM_PLANILHA,
+        Fase.PROCESSAMENTO_CANCELADO,
+        Fase.FALHOU,
+    ],
+)
+def test_AC_018_2_terminar_grava_o_instante_de_termino_do_relogio_injetado(
+    tmp_path, fase
+):
+    fim = INICIO + timedelta(minutes=17, seconds=5)
+    a = anotador_em_processamento(tmp_path, agora=lambda: fim)
+    a.evento_aceito(1, Categoria.CARRO)
+
+    a.terminar(fase, mensagem="x")
+
+    estado = ler_estado(tmp_path)
+    assert estado.terminada_em == fim
+    assert estado.quantidades["CARRO"] == 1
+
+
+def test_estado_de_versao_anterior_sem_campos_novos_e_lido_sem_falhar(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    caminho = tmp_path / NOME_DO_ESTADO
+    dados = json.loads(caminho.read_text(encoding="utf-8"))
+    del dados["quantidades"]
+    del dados["terminada_em"]
+    caminho.write_text(json.dumps(dados), encoding="utf-8")
+
+    estado = ler_estado(tmp_path)
+
+    assert estado is not None
+    assert estado.quantidades is None
+    assert estado.terminada_em is None
+
+
+def test_falha_ao_regravar_por_evento_nao_levanta(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "ESPERA_ENTRE_TENTATIVAS", 0)
+    a = anotador_em_processamento(tmp_path)
+
+    def negado(origem, destino):
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(state.os, "replace", negado)
+
+    a.evento_aceito(1, Categoria.CARRO)
+    a.minuto_descartado(1)
+
+    assert list(tmp_path.glob("*.tmp")) == []

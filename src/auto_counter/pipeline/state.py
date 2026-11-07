@@ -15,16 +15,24 @@ O arquivo **fica** depois do fim da sessão, para a interface mostrar o resultad
 da última sessão ao ser reaberta. Estado em fase não terminal sem uma trava viva
 do mesmo `pid` significa que o processo morreu sem concluir; quem decide isso é
 a leitura (T-13), não este módulo.
+
+Por `acompanhamento-ao-vivo` (SUP-058), o arquivo também carrega as quantidades
+de veículos já contados por categoria (`quantidades`, `null` na captura) e o
+instante do desfecho (`terminada_em`, `null` até terminar). O total não é
+gravado: é a soma das quatro categorias, calculada por quem lê (SUP-054).
 """
 
 import json
 import os
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
 from pathlib import Path
+
+from auto_counter.counting.config import Categoria
 
 NOME_DO_ESTADO = "sessao_atual.json"
 """Nome do arquivo dentro do diretório de dados (D-9)."""
@@ -72,6 +80,11 @@ class EstadoDaSessao:
     status: str | None = None
     planilha: str | None = None
     mensagem: str | None = None
+    quantidades: dict[str, int] | None = None
+    """Veículos contados por categoria, chaveados por `Categoria.value` (D-4).
+    `None` durante a captura (SUP-055); zeros a partir do processamento."""
+    terminada_em: datetime | None = None
+    """Instante UTC do desfecho; `None` até `terminar`."""
 
 
 def _em_utc(instante: datetime) -> datetime:
@@ -110,7 +123,21 @@ def _como_dicionario(estado: EstadoDaSessao) -> dict:
         "status": estado.status,
         "planilha": estado.planilha,
         "mensagem": estado.mensagem,
+        "quantidades": (
+            None if estado.quantidades is None else dict(estado.quantidades)
+        ),
+        "terminada_em": (
+            None
+            if estado.terminada_em is None
+            else _em_utc(estado.terminada_em).isoformat()
+        ),
     }
+
+
+def _ler_quantidades(bruto) -> dict[str, int] | None:
+    if bruto is None:
+        return None
+    return {categoria.value: int(bruto[categoria.value]) for categoria in Categoria}
 
 
 def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
@@ -136,6 +163,13 @@ def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
             status=dados["status"],
             planilha=dados["planilha"],
             mensagem=dados["mensagem"],
+            # Arquivo de versão anterior não tem os dois campos: valem `None`.
+            quantidades=_ler_quantidades(dados.get("quantidades")),
+            terminada_em=(
+                None
+                if dados.get("terminada_em") is None
+                else _em_utc(datetime.fromisoformat(dados["terminada_em"]))
+            ),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -157,8 +191,13 @@ class AnotadorDoEstado:
         nome_camera: str | None,
         duracao_pedida: int,
         iniciada_em: datetime,
+        agora: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
     ) -> None:
         self._data_dir = Path(data_dir)
+        self._agora = agora
+        # Quanto de cada categoria veio do minuto em curso (D-5). Só em
+        # memória: se o processo morrer, a sessão termina sem resultado.
+        self._do_minuto: dict[str, int] = {}
         self._estado = EstadoDaSessao(
             pid=pid,
             id_camera=id_camera,
@@ -198,11 +237,32 @@ class AnotadorDoEstado:
             id_sessao=id_sessao,
             minutos_a_processar=a_processar,
             minutos_processados=0,
+            quantidades={categoria.value: 0 for categoria in Categoria},
         )
+        self._do_minuto = {}
+        self._gravar()
+
+    def evento_aceito(self, minuto: int, categoria: Categoria) -> None:
+        """Soma um veículo à categoria e ao acumulador do minuto (AC-016.2)."""
+        quantidades = dict(self._estado.quantidades or {})
+        chave = categoria.value
+        quantidades[chave] = quantidades.get(chave, 0) + 1
+        self._do_minuto[chave] = self._do_minuto.get(chave, 0) + 1
+        self._estado = replace(self._estado, quantidades=quantidades)
+        self._gravar()
+
+    def minuto_descartado(self, minuto: int) -> None:
+        """Desconta o que o minuto em curso tinha somado (AC-016.8, SUP-061)."""
+        quantidades = dict(self._estado.quantidades or {})
+        for chave, quantos in self._do_minuto.items():
+            quantidades[chave] = quantidades.get(chave, 0) - quantos
+        self._do_minuto = {}
+        self._estado = replace(self._estado, quantidades=quantidades)
         self._gravar()
 
     def minuto_processado(self) -> None:
-        """Conta mais um minuto analisado (AC-012.2)."""
+        """Conta mais um minuto analisado (AC-012.2); o minuto vira definitivo."""
+        self._do_minuto = {}
         self._estado = replace(
             self._estado, minutos_processados=self._estado.minutos_processados + 1
         )
@@ -227,6 +287,7 @@ class AnotadorDoEstado:
             status=status,
             planilha=planilha,
             mensagem=mensagem,
+            terminada_em=_em_utc(self._agora()),
         )
         if not self._gravar():
             print(
