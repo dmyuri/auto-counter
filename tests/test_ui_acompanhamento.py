@@ -9,11 +9,12 @@ inicia uma sessão de verdade, abre navegador ou toca a rede.
 """
 
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
 from auto_counter.capture.status import StatusDaSessao
+from auto_counter.counting.config import Categoria
 from auto_counter.pipeline.lock import adquirir_trava
 from auto_counter.pipeline.state import AnotadorDoEstado, Fase
 from auto_counter.pipeline.stop import NOME_DO_PEDIDO
@@ -291,3 +292,205 @@ def test_sessao_que_terminou_sem_concluir_aparece_como_falha(data_dir):
 
     assert any("terminou sem concluir" in e.value for e in at.error)
     assert downloads(at) == []
+
+
+ROTULOS_DAS_METRICAS = ["Carro", "Ônibus", "Caminhão", "Moto", "Total"]
+AVISO_DA_CAPTURA = "A contagem de veículos começa quando a captura terminar."
+
+
+class Relogio:
+    """O relógio da leitura de `ler_progresso`, fixado pelo teste."""
+
+    def __init__(self, instante: datetime = INICIO) -> None:
+        self.instante = instante
+
+    def avancar(self, **intervalo) -> None:
+        self.instante = self.instante + timedelta(**intervalo)
+
+
+@pytest.fixture
+def relogio(monkeypatch) -> Relogio:
+    relogio = Relogio()
+    monkeypatch.setattr("auto_counter.pipeline.progress._agora", lambda: relogio.instante)
+    return relogio
+
+
+def metricas(at) -> list[tuple[str, str]]:
+    return [(m.proto.label, m.value) for m in at.metric]
+
+
+def em_processamento(data_dir, fim: datetime | None = None) -> AnotadorDoEstado:
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        **({} if fim is None else {"agora": lambda: fim}),
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.processamento_iniciado(ID_SESSAO, 1)
+    return a
+
+
+def test_AC_016_1_processamento_mostra_cinco_metricas_em_zero(data_dir, relogio):
+    em_processamento(data_dir)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+
+    assert not at.exception
+    assert metricas(at) == [(rotulo, "0") for rotulo in ROTULOS_DAS_METRICAS]
+
+
+def test_AC_016_5_captura_mostra_aviso_e_nenhuma_metrica(data_dir, relogio):
+    captura_em_curso(data_dir)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+
+    assert not at.exception
+    assert at.metric == []
+    assert AVISO_DA_CAPTURA in textos(at)
+
+
+def test_AC_016_2_processamento_mostra_as_quantidades_e_o_total(data_dir, relogio):
+    a = em_processamento(data_dir)
+    for categoria in (Categoria.CARRO, Categoria.CARRO, Categoria.MOTO):
+        a.evento_aceito(1, categoria)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+
+    assert metricas(at) == [
+        ("Carro", "2"),
+        ("Ônibus", "0"),
+        ("Caminhão", "0"),
+        ("Moto", "1"),
+        ("Total", "3"),
+    ]
+    assert AVISO_DA_CAPTURA not in textos(at)
+
+
+def test_AC_016_7_reabrir_a_interface_mostra_as_mesmas_quantidades(data_dir, relogio):
+    a = em_processamento(data_dir)
+    a.evento_aceito(1, Categoria.ONIBUS)
+    a.evento_aceito(1, Categoria.CAMINHAO)
+
+    with trava_do_run(data_dir):
+        primeira = abre_a_interface()
+        segunda = abre_a_interface()
+
+    assert metricas(primeira) == metricas(segunda)
+    assert ("Total", "2") in metricas(segunda)
+
+
+def test_AC_017_1_captura_e_processamento_mostram_tempo_decorrido_mm_ss(
+    data_dir, relogio
+):
+    relogio.avancar(minutes=1, seconds=15, milliseconds=900)
+
+    captura_em_curso(data_dir)
+    with trava_do_run(data_dir):
+        na_captura = abre_a_interface()
+
+    assert "Tempo decorrido: 01:15" in textos(na_captura)
+
+    em_processamento(data_dir)
+    with trava_do_run(data_dir):
+        no_processamento = abre_a_interface()
+
+    assert "Tempo decorrido: 01:15" in textos(no_processamento)
+
+
+def test_AC_017_3_tempo_exibido_avanca_com_o_relogio(data_dir, relogio):
+    em_processamento(data_dir)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+        assert "Tempo decorrido: 00:00" in textos(at)
+        relogio.avancar(seconds=42)
+        at = at.run()
+
+    assert "Tempo decorrido: 00:42" in textos(at)
+
+
+def test_AC_017_4_reabrir_mostra_tempo_desde_o_inicio_da_sessao(data_dir, relogio):
+    em_processamento(data_dir)
+    relogio.avancar(minutes=7, seconds=3)
+
+    with trava_do_run(data_dir):
+        reaberta = abre_a_interface()
+
+    assert "Tempo decorrido: 07:03" in textos(reaberta)
+
+
+def test_AC_018_1_concluida_mostra_metricas_finais_e_tempo_total(data_dir, relogio):
+    with conectar(data_dir) as conexao:
+        gravar_sessao(conexao, status=StatusDaSessao.COMPLETA)
+    planilha = data_dir / "000013_20260907_0800_1min.xlsx"
+    planilha.write_bytes(b"xlsx")
+    a = em_processamento(data_dir, fim=INICIO + timedelta(minutes=17, seconds=5))
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.MOTO)
+    a.minuto_processado()
+    a.terminar(
+        Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", planilha=str(planilha)
+    )
+    relogio.avancar(hours=3)
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert metricas(at) == [
+        ("Carro", "2"),
+        ("Ônibus", "0"),
+        ("Caminhão", "0"),
+        ("Moto", "1"),
+        ("Total", "3"),
+    ]
+    assert "Tempo total: 17:05" in textos(at)
+    (download,) = downloads(at)
+    assert download.proto.label == "Baixar planilha (XLSX)"
+
+
+@pytest.mark.parametrize(
+    "fase",
+    [Fase.PROCESSAMENTO_CANCELADO, Fase.SEM_PLANILHA, Fase.FALHOU],
+)
+def test_AC_018_3_cancelada_sem_planilha_e_falhou_mostram_so_o_tempo_total(
+    data_dir, relogio, fase
+):
+    a = em_processamento(data_dir, fim=INICIO + timedelta(minutes=2, seconds=30))
+    a.evento_aceito(1, Categoria.CARRO)
+    a.terminar(fase, id_sessao=ID_SESSAO, status="COMPLETA", mensagem="desfecho")
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert at.metric == []
+    assert "Tempo total: 02:30" in textos(at)
+
+
+def test_AC_018_4_processo_morto_nao_mostra_metricas_nem_tempo(data_dir, relogio):
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=2**22 + 777,
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.processamento_iniciado(ID_SESSAO, 1)
+    a.evento_aceito(1, Categoria.CARRO)
+
+    at = abre_a_interface()
+
+    assert any("terminou sem concluir" in e.value for e in at.error)
+    assert at.metric == []
+    assert "Tempo" not in textos(at)

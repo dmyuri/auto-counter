@@ -12,6 +12,11 @@ reabrir a aba reencontra a sessão, e só o botão de encerrar, com confirmaçã
 pede o fim antecipado), AC-012.5 (processamento cancelado, sem download) e
 AC-012.6 (sem planilha, com o status).
 
+E, por `acompanhamento-ao-vivo`, as quantidades por categoria e o tempo da
+sessão: AC-016.1 e AC-016.5 (quantidades no processamento, aviso na captura),
+AC-017.1 (tempo decorrido) e AC-018.1 a AC-018.4 (quantidades finais e tempo
+total no resultado). A tela só exibe o que `ler_progresso` devolve (SUP-058).
+
 Esta é só a casca (SUP-038): nenhuma regra de captura, contagem ou exportação
 mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 `auto_counter.pipeline`, e é o `pipeline` que lê o progresso e dispara a sessão.
@@ -36,8 +41,10 @@ from auto_counter.pipeline.cameras import (
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
     Andamento,
+    Quantidades,
     Resultado,
     Situacao,
+    formatar_tempo,
     ler_progresso,
 )
 from auto_counter.pipeline.state import Fase
@@ -50,6 +57,11 @@ ATUALIZACAO_EM_SEGUNDOS = 2
 """De quanto em quanto tempo a área da sessão se relê do disco (D-17)."""
 
 CHAVE_CONFIRMANDO = "confirmando_encerramento"
+
+AVISO_SEM_CONTAGEM_NA_CAPTURA = (
+    "A contagem de veículos começa quando a captura terminar."
+)
+"""AC-016.5: na captura não há quantidade, nem zero (SUP-055)."""
 
 AVISO_DE_ENCERRAR = {
     Fase.CAPTURA: (
@@ -84,6 +96,19 @@ def _confirmar(data_dir: Path) -> None:
     launch.encerrar_sessao(data_dir)
 
 
+def _quantidades(quantidades: Quantidades) -> None:
+    """As cinco métricas, na ordem de D-8; o total já vem somado (SUP-054)."""
+    valores = (
+        ("Carro", quantidades.carro),
+        ("Ônibus", quantidades.onibus),
+        ("Caminhão", quantidades.caminhao),
+        ("Moto", quantidades.moto),
+        ("Total", quantidades.total),
+    )
+    for coluna, (rotulo, valor) in zip(st.columns(len(valores)), valores):
+        coluna.metric(rotulo, valor)
+
+
 def _andamento(andamento: Andamento, data_dir: Path) -> None:
     """A sessão em curso: fase, progresso e o botão de encerrar (AC-012.1/2)."""
     if andamento.fase is Fase.CAPTURA:
@@ -106,6 +131,12 @@ def _andamento(andamento: Andamento, data_dir: Path) -> None:
         total = andamento.a_processar
     st.progress(min(1.0, resolvidos / total) if total else 0.0)
 
+    if andamento.quantidades is None:
+        st.info(AVISO_SEM_CONTAGEM_NA_CAPTURA)
+    else:
+        _quantidades(andamento.quantidades)
+    st.markdown(f"Tempo decorrido: {formatar_tempo(andamento.tempo_decorrido)}")
+
     if not andamento.pode_encerrar:
         return
     if not st.session_state.get(CHAVE_CONFIRMANDO, False):
@@ -116,12 +147,21 @@ def _andamento(andamento: Andamento, data_dir: Path) -> None:
     st.button("Voltar", on_click=_voltar)
 
 
+def _tempo_total(resultado: Resultado) -> None:
+    """AC-018.1 e AC-018.3; sem instante de término, nada é mostrado (AC-018.4)."""
+    if resultado.tempo_total is not None:
+        st.markdown(f"Tempo total: {formatar_tempo(resultado.tempo_total)}")
+
+
 def _resultado(resultado: Resultado) -> None:
     """O desfecho da última sessão (AC-012.3, AC-012.5 e AC-012.6)."""
     if resultado.fase is Fase.CONCLUIDA:
         st.success(f"Sessão concluída — status {resultado.status}.")
         if resultado.aviso:
             st.warning(resultado.aviso)
+        if resultado.quantidades is not None:
+            _quantidades(resultado.quantidades)
+        _tempo_total(resultado)
         if resultado.planilha is not None:
             try:
                 dados = resultado.planilha.read_bytes()
@@ -140,10 +180,13 @@ def _resultado(resultado: Resultado) -> None:
         st.warning(
             f"Status da sessão: {resultado.status}. {resultado.mensagem}"
         )
+        _tempo_total(resultado)
     elif resultado.fase is Fase.PROCESSAMENTO_CANCELADO:
         st.info(f"Processamento cancelado. {resultado.mensagem}")
+        _tempo_total(resultado)
     else:
         st.error(resultado.mensagem or "A sessão falhou.")
+        _tempo_total(resultado)
 
 
 def _area_da_sessao(data_dir: Path, estava_em_andamento: bool) -> None:
