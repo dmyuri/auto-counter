@@ -54,24 +54,49 @@ Critérios de aceite:
   AC-012.2 — Dado uma sessão em andamento, quando a interface é consultada, então
   ela indica em qual das duas fases a sessão está, captura ou processamento, e o
   progresso dentro da fase atual.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > Na fase de processamento a interface passa a mostrar também as quantidades
+  > de carro, ônibus, caminhão, moto e total, atualizadas a cada veículo aceito,
+  > e nas duas fases o tempo decorrido da sessão, mantido o progresso em minutos
+  > (AC-016.1 a AC-016.8 e AC-017.1 a AC-017.3).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
   AC-012.3 — Dado uma sessão concluída, quando o usuário acessa o resultado,
   então a interface exibe o status da sessão e oferece o download do XLSX
   correspondente àquela sessão.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > O resultado da sessão concluída passa a exibir também as quantidades finais
+  > por categoria, o total e o tempo total da sessão, sem mudar o status nem o
+  > download (AC-018.1 e AC-018.2).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
   AC-012.4 — Dado uma sessão em andamento, quando a interface é fechada e aberta
   de novo, então a sessão continua em andamento, o progresso dela é reencontrado
   e nenhum minuto foi perdido por causa do fechamento; o encerramento antecipado
   só acontece por ação explícita do usuário.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > Fechar e reabrir a interface passa a reencontrar também as quantidades
+  > exibidas e o tempo decorrido, que continua contando do início da sessão
+  > (AC-016.7 e AC-017.4).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
   AC-012.5 — Dado uma sessão em processamento, quando o usuário a encerra
   explicitamente, então a contagem para, nenhum resultado de contagem é gravado,
   os vídeos da sessão permanecem em disco para reprocessamento e a interface
   informa que o processamento foi cancelado, sem oferecer download.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > O resultado da sessão cancelada passa a exibir o tempo total da sessão, sem
+  > nenhuma quantidade de veículos e sem download, e as quantidades parciais
+  > vistas durante o processamento deixam de aparecer (AC-018.3).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
   AC-012.6 — Dado uma sessão encerrada em que nenhum clipe pôde ser processado,
   quando o usuário acessa o resultado, então a interface exibe o status da sessão
   e informa que não há planilha, sem oferecer download.
+  > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
+  > O resultado da sessão sem planilha passa a exibir o tempo total da sessão,
+  > sem nenhuma quantidade de veículos e sem download (AC-018.3).
+  > Ver `.spec/features/acompanhamento-ao-vivo/spec.md`.
 
 US-013 — Uma sessão por vez
 Como integrante do projeto de extensão, quero que o sistema recuse iniciar uma
