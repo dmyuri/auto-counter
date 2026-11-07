@@ -32,6 +32,13 @@ total de frames do vídeo — por isso o detector real entra embrulhado por um
 contador que só conta as chamadas de `detectar`, sem alterar o que elas
 devolvem.
 
+**A medição inclui a gravação do progresso por evento**, por causa da feature
+`acompanhamento-ao-vivo` (nota de AC-005.4 em `contagem-veiculos`): o processamento
+roda com os mesmos ganchos que `session run` liga, e um `AnotadorDoEstado` real
+regrava o `sessao_atual.json` (num diretório temporário) a cada evento aceito.
+O orçamento de 133 ms, o denominador e a regra de falhar em vez de pular não
+mudaram.
+
 Efeito colateral assumido: processar a sessão grava o `eventos.json` dela (D-1),
 como qualquer processamento. Os vídeos não são apagados — o descarte de D-5 é do
 comando de T-13, e este teste não passa por ele.
@@ -39,6 +46,7 @@ comando de T-13, e este teste não passa por ele.
 
 import os
 import time
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -51,6 +59,7 @@ from auto_counter.counting.config import ConfiguracaoDoProcessamento
 from auto_counter.counting.detector import Detector, criar_sessao
 from auto_counter.counting.model import caminho_do_modelo, versao_do_modelo
 from auto_counter.counting.session import processar_sessao
+from auto_counter.pipeline.state import AnotadorDoEstado
 
 VARIAVEL_DA_SESSAO = "AUTO_COUNTER_PERF_SESSION"
 """De onde sai a sessão real usada na medição (D-3)."""
@@ -109,7 +118,9 @@ def _sessao_de_medicao() -> Path:
 
 
 @pytest.mark.perf
-def test_AC_005_4_tempo_medio_por_frame_analisado_fica_dentro_do_orcamento() -> None:
+def test_AC_005_4_tempo_medio_por_frame_analisado_fica_dentro_do_orcamento(
+    tmp_path,
+) -> None:
     dir_sessao = _sessao_de_medicao()
     manifest = ler_manifest(dir_sessao)
 
@@ -149,6 +160,21 @@ def test_AC_005_4_tempo_medio_por_frame_analisado_fica_dentro_do_orcamento() -> 
     config = ConfiguracaoDoProcessamento()
     detector = DetectorContado(Detector(criar_sessao(caminho_do_onnx), config))
 
+    # O estado de progresso é real e fica em `tmp_path`: o que se mede é o custo
+    # de regravá-lo a cada evento aceito, dentro do laço do processamento.
+    anotador = AnotadorDoEstado(
+        tmp_path,
+        pid=os.getpid(),
+        id_camera=camera.id,
+        nome_camera=camera.nome,
+        duracao_pedida=manifest.duracao_pedida,
+        iniciada_em=datetime.now(timezone.utc),
+    )
+    anotador.iniciar()
+    anotador.processamento_iniciado(
+        manifest.id_sessao, len(manifest.minutos_capturados)
+    )
+
     comeco = time.perf_counter()
     processar_sessao(
         dir_sessao,
@@ -156,6 +182,11 @@ def test_AC_005_4_tempo_medio_por_frame_analisado_fica_dentro_do_orcamento() -> 
         detector=detector,
         config=config,
         versao_do_modelo=versao_do_modelo(caminho_do_onnx),
+        ao_resolver_minuto=lambda _minuto: anotador.minuto_processado(),
+        ao_aceitar_evento=lambda minuto, evento: anotador.evento_aceito(
+            minuto, evento.categoria
+        ),
+        ao_descartar_minuto=anotador.minuto_descartado,
     )
     total_em_segundos = time.perf_counter() - comeco
 
@@ -177,6 +208,7 @@ def test_AC_005_4_tempo_medio_por_frame_analisado_fica_dentro_do_orcamento() -> 
         f"Amostragem:        1 frame a cada {config.amostragem}\n"
         f"Limiar:            {config.limiar_de_confianca}\n"
         f"Frames analisados: {analisados}\n"
+        f"Eventos aceitos:   {sum(anotador.estado.quantidades.values())}\n"
         f"Tempo total:       {total_em_segundos:.1f} s\n"
         f"Média por frame:   {media_em_ms:.1f} ms\n"
         f"Orçamento:         {ORCAMENTO_EM_MS:.0f} ms\n"
