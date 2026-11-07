@@ -33,6 +33,11 @@ Critérios de aceite:
   1 ≤ N ≤ 15, quando a captura termina sem falhas, então há exatamente N clipes
   distintos gravados em disco, cada um associado ao seu número de minuto, ao seu
   ETag e ao seu Last-Modified.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload não há clipe por minuto, ETag nem Last-Modified, e cada
+  > vídeo enviado fica associado à sessão pela posição na lista, pelo sha256 e
+  > pelos minutos que ocupa (AC-030.1).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-003.2 — Dado que o servidor responde com o mesmo ETag da checagem anterior,
   quando o sistema verifica se há clipe novo, então não baixa o conteúdo
@@ -41,15 +46,28 @@ Critérios de aceite:
   AC-003.3 — Dado uma duração fora do intervalo de 1 a 15 minutos, quando a
   captura é solicitada, então é rejeitada com erro que cita o limite, antes de
   qualquer requisição ao servidor.
+  > **Alterado por:** feature `upload-videos`, em 2026-11-07.
+  > O limite de 1 a 15 minutos não se aplica à sessão de upload, que tem o
+  > limite equivalente de 15 min de duração somada dos vídeos (AC-027.11).
+  > Ver `.spec/features/upload-videos/spec.md`.
 
   AC-003.4 — Dado uma captura concluída, quando o período da sessão é registrado,
   então início e fim vêm do Last-Modified do primeiro e do último clipe
   efetivamente capturados, e não do relógio local no início do comando.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o período passa a ser o início e o término do
+  > processamento no relógio local, marcado como "horário do processamento"
+  > (AC-030.3 e SUP-100).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-003.5 — Dado uma sessão cujo processamento terminou e que foi executada sem
   a opção de manter os vídeos, quando a sessão é encerrada, então nenhum arquivo
   de vídeo dela permanece em disco; com a opção ativa, todos os clipes
   permanecem no diretório da sessão.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload concluída, os vídeos enviados são sempre apagados,
+  > porque o upload não tem a opção de mantê-los (AC-030.6 e SUP-097).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-003.6 — Dado que o usuário interrompe explicitamente a captura no minuto k
   de N minutos pedidos, quando a sessão é encerrada, então a duração real da
@@ -80,14 +98,26 @@ Critérios de aceite:
 
   AC-004.4 — Dado uma sessão de N minutos em que nenhum minuto foi perdido,
   quando a captura termina, então a sessão recebe status COMPLETA.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o minuto perdido passa a ser o minuto sem dado por
+  > falha de leitura, com o mesmo limite (AC-030.4 e SUP-095).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-004.5 — Dado uma sessão de N minutos com pelo menos um minuto perdido e no
   máximo 20% de N perdidos, quando a captura termina, então a sessão recebe
   status DEGRADADA e a lista dos números dos minutos perdidos fica registrada.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o minuto perdido passa a ser o minuto sem dado por
+  > falha de leitura, com o mesmo limite (AC-030.4 e SUP-095).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-004.6 — Dado uma sessão de N minutos com mais de 20% de N perdidos, quando a
   captura termina, então a sessão recebe status INVÁLIDA e a lista dos números
   dos minutos perdidos fica registrada.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o minuto perdido passa a ser o minuto sem dado por
+  > falha de leitura, com o mesmo limite (AC-030.4 e SUP-095).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-004.7 — Dado um clipe baixado cujo conteúdo é byte a byte igual ao do clipe
   imediatamente anterior aceito na sessão, ainda que o ETag e o Last-Modified
