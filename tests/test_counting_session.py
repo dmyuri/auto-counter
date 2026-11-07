@@ -40,12 +40,18 @@ from auto_counter.cameras.model import Camera, Linha, Ponto
 from auto_counter.capture.manifest import ManifestDaSessao, nome_do_arquivo_do_minuto
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
+from auto_counter.counting import sampling
 from auto_counter.counting.events import NOME_DO_ARQUIVO_DE_EVENTOS
 from auto_counter.counting.events import ler as ler_eventos
 from auto_counter.counting.session import (
     ProcessamentoCancelado,
     SessaoSemClipes,
     processar_sessao,
+)
+from auto_counter.counting.sampling import (
+    MOTIVO_NAO_ABRE,
+    AmostragemDoClipe,
+    FrameAmostrado,
 )
 
 LARGURA = 128
@@ -468,3 +474,181 @@ def test_o_modulo_de_contagem_nao_importa_httpx():
 
     assert "httpx" not in importados
     assert "session" not in importados  # `capture.session` traria o `httpx`
+
+
+class Registro:
+    """Os ganchos de `acompanhamento-ao-vivo`, gravando a ordem em que chegam."""
+
+    def __init__(self) -> None:
+        self.chamadas: list[tuple] = []
+
+    def aceitar(self, minuto, evento) -> None:
+        self.chamadas.append(("aceito", minuto, evento))
+
+    def descartar(self, minuto) -> None:
+        self.chamadas.append(("descartado", minuto))
+
+    def resolver(self, minuto) -> None:
+        self.chamadas.append(("resolvido", minuto))
+
+    @property
+    def publicados(self):
+        return [c[2] for c in self.chamadas if c[0] == "aceito"]
+
+    @property
+    def descartados(self):
+        return [c[1] for c in self.chamadas if c[0] == "descartado"]
+
+    def processa(self, dir_sessao, detector):
+        return processa(
+            dir_sessao,
+            detector,
+            ao_aceitar_evento=self.aceitar,
+            ao_descartar_minuto=self.descartar,
+            ao_resolver_minuto=self.resolver,
+        )
+
+
+def ordenados(eventos):
+    return sorted(eventos, key=lambda e: (e.minuto, e.indice_do_frame, e.id_de_rastreio))
+
+
+def test_AC_016_2_cada_evento_aceito_e_publicado_antes_do_minuto_terminar(tmp_path):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+    registro = Registro()
+
+    registro.processa(dir_sessao, detector)
+
+    assert [(c[0], c[1]) for c in registro.chamadas] == [
+        ("aceito", 1),
+        ("resolvido", 1),
+        ("aceito", 2),
+        ("resolvido", 2),
+    ]
+
+
+def test_AC_016_3_duplicata_da_emenda_nunca_e_publicada(tmp_path):
+    """O cenário de AC-007.1: o cruzamento do minuto 2 repete o do minuto 1."""
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+    )
+    registro = Registro()
+
+    registro.processa(dir_sessao, detector)
+
+    assert [e.minuto for e in registro.publicados] == [1]
+
+
+def test_AC_016_3_publicados_sao_exatamente_os_eventos_gravados(tmp_path):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2, 3))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)  # duplicata
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.MOTO)
+    )
+    registro = Registro()
+
+    resultado = registro.processa(dir_sessao, detector)
+
+    assert len(registro.publicados) == 2
+    assert ordenados(registro.publicados) == ordenados(resultado.eventos)
+    assert ordenados(registro.publicados) == ordenados(ler_eventos(dir_sessao).eventos)
+
+
+def test_AC_006_6_mesmo_rastreio_no_mesmo_sentido_e_publicado_uma_vez(tmp_path):
+    """Um rastreio que oscila sobre a linha: ida, volta e ida de novo.
+
+    A segunda ida é o mesmo par (rastreio, sentido) e não gera publicação.
+    """
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1,))
+    escritor = cv2.VideoWriter(
+        str(dir_sessao / nome_do_arquivo_do_minuto(1)),
+        cv2.VideoWriter_fourcc(*"mp4v"),
+        FPS,
+        (LARGURA, ALTURA),
+    )
+    for _ in range(4 * AMOSTRAGEM):
+        escritor.write(np.zeros((ALTURA, LARGURA, 3), dtype=np.uint8))
+    escritor.release()
+    detector = DetectorDuble(
+        roteiro_do_clipe((DIREITA, ESQUERDA, DIREITA, ESQUERDA))
+    )
+    registro = Registro()
+
+    registro.processa(dir_sessao, detector)
+
+    sentidos = [e.sentido for e in registro.publicados]
+    assert sentidos.count("CENTRO") == 1
+    assert len(sentidos) == len(set(sentidos))
+
+
+def test_AC_016_6_minuto_perdido_e_clipe_sem_frame_nao_publicam_nada(tmp_path):
+    """Perdido na captura, arquivo ausente e arquivo ilegível: nada é somado.
+
+    Só o minuto 1 tem cruzamento; os demais não podem publicar evento algum.
+    """
+    dir_sessao = monta_sessao(
+        tmp_path,
+        minutos_capturados=(1, 2, 3, 5),
+        minutos_perdidos=(4,),
+        minutos_sem_arquivo=(2,),
+        status=StatusDaSessao.DEGRADADA,
+    )
+    (dir_sessao / nome_do_arquivo_do_minuto(3)).write_bytes(b"isto nao e um mp4")
+    detector = DetectorDuble(roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA))
+    registro = Registro()
+
+    registro.processa(dir_sessao, detector)
+
+    assert [e.minuto for e in registro.publicados] == [1]
+
+
+class AmostragemQueFalhaNoFim(AmostragemDoClipe):
+    """Entrega os frames 0 e 3 e então falha, como o `except` de `sampling.py`."""
+
+    def __iter__(self):
+        self.fps = FPS
+        for indice in (0, 3):
+            self.total_de_frames = indice + 1
+            yield FrameAmostrado(
+                indice=indice, imagem=np.zeros((ALTURA, LARGURA, 3), dtype=np.uint8)
+            )
+        self.motivo = MOTIVO_NAO_ABRE
+
+
+def test_AC_016_8_clipe_que_falha_no_meio_publica_e_depois_descarta_o_minuto(
+    tmp_path, monkeypatch
+):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    real = sampling.frames_amostrados
+
+    def falha_no_minuto_2(caminho, amostragem):
+        if Path(caminho).name == nome_do_arquivo_do_minuto(2):
+            return AmostragemQueFalhaNoFim(caminho, amostragem)
+        return real(caminho, amostragem)
+
+    monkeypatch.setattr(
+        "auto_counter.counting.clip.frames_amostrados", falha_no_minuto_2
+    )
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+    registro = Registro()
+
+    resultado = registro.processa(dir_sessao, detector)
+
+    assert [(c[0], c[1]) for c in registro.chamadas] == [
+        ("aceito", 1),
+        ("resolvido", 1),
+        ("aceito", 2),
+        ("descartado", 2),
+        ("resolvido", 2),
+    ]
+    assert [e.minuto for e in resultado.eventos] == [1]

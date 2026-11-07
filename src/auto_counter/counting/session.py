@@ -7,7 +7,10 @@ dos três módulos anteriores tem como tomar — acontecem:
 - AC-007.3 — cada minuto ganha rastreador novo, porque quem cria o rastreador é
   `processar_clipe`, chamada uma vez por minuto;
 - AC-007.1 e AC-007.2 — a deduplicação da emenda é aplicada entre o minuto
-  anterior e o atual, com os `fps` e a duração lidos de cada clipe;
+  anterior e o atual, com os `fps` e a duração lidos de cada clipe. Por
+  SUP-053 de `acompanhamento-ao-vivo`, ela é aplicada **evento a evento**, no
+  momento em que o cruzamento é gerado (`FiltroDaEmenda`), e não depois do clipe
+  inteiro; o resultado gravado é o mesmo;
 - AC-007.4 — **a adjacência é decidida aqui**, a partir do manifest: dois
   minutos são adjacentes quando são consecutivos e os dois foram capturados
   **e processados**. Minuto perdido na captura (AC-004.5) ou não processado por
@@ -35,6 +38,12 @@ Para `interface-sessao`, o processamento é observável e interrompível:
 antes de cada clipe (AC-012.5). Pedida a parada, a função levanta
 `ProcessamentoCancelado`; o `eventos.json` parcial que já tenha sido gravado
 fica onde está, e quem decide o que fazer com ele é o chamador.
+
+Para `acompanhamento-ao-vivo`, `ao_aceitar_evento` publica cada evento aceito
+(já depois da emenda e de AC-006.6) assim que ele é gerado, e
+`ao_descartar_minuto` avisa que os eventos já publicados de um clipe que falhou
+no meio da leitura foram jogados fora (D-4, AC-016.8), antes de
+`ao_resolver_minuto`.
 """
 
 from collections.abc import Callable
@@ -56,7 +65,7 @@ from auto_counter.counting.events import (
     RegistroDeEventos,
 )
 from auto_counter.counting.events import ler as ler_eventos
-from auto_counter.counting.seam import deduplicar
+from auto_counter.counting.seam import FiltroDaEmenda
 from auto_counter.counting.tracking import RastreadorDoSupervision, criar_bytetrack
 
 MOTIVO_MINUTO_PERDIDO_NA_CAPTURA = "minuto perdido na captura: {motivo}"
@@ -129,6 +138,8 @@ def processar_sessao(
     fabrica_de_bytetrack: Callable[[], RastreadorDoSupervision] = criar_bytetrack,
     parada: ParadaDoProcessamento | None = None,
     ao_resolver_minuto: Callable[[int], None] | None = None,
+    ao_aceitar_evento: Callable[[int, Evento], None] | None = None,
+    ao_descartar_minuto: Callable[[int], None] | None = None,
 ) -> ResultadoDaContagem:
     """Processa todos os clipes de uma sessão e grava o `eventos.json` (D-1).
 
@@ -144,6 +155,12 @@ def processar_sessao(
     `ProcessamentoCancelado` sem abrir o clipe seguinte. `ao_resolver_minuto`
     recebe o número de cada minuto capturado depois de resolvido, processado ou
     não processado (AC-012.2). Sem os dois, nada muda.
+
+    `ao_aceitar_evento(minuto, evento)` é chamado a cada evento aceito, no
+    momento em que o cruzamento é gerado (AC-016.2). `ao_descartar_minuto(minuto)`
+    é chamado quando o clipe falha (D-4), antes de `ao_resolver_minuto`
+    (AC-016.8). Minuto perdido na captura nunca chega ao clipe e não publica
+    nada (AC-016.6).
     """
     dir_sessao = Path(dir_sessao)
     manifest = manifest_da_captura.ler(dir_sessao)
@@ -187,6 +204,25 @@ def processar_sessao(
                 f"o processamento da sessão {manifest.id_sessao} foi cancelado "
                 f"a pedido do usuário antes do minuto {minuto}"
             )
+        if anterior is None:
+            filtro = FiltroDaEmenda.sem_anterior()
+        else:
+            minuto_anterior, clipe_anterior = anterior
+            filtro = FiltroDaEmenda(
+                eventos_do_clipe_anterior=clipe_anterior.eventos,
+                adjacentes=(minuto == minuto_anterior + 1),
+                fps_do_clipe_anterior=clipe_anterior.fps,
+                duracao_do_clipe_anterior=clipe_anterior.duracao_em_segundos,
+                config=config,
+            )
+        aceitos: list[Evento] = []
+
+        def ao_gerar(evento: Evento, fps: float) -> None:
+            if filtro.aceita(evento, fps_do_clipe_atual=fps):
+                aceitos.append(evento)
+                if ao_aceitar_evento is not None:
+                    ao_aceitar_evento(minuto, evento)
+
         resultado = processar_clipe(
             dir_sessao / capturado.arquivo,
             camera=camera,
@@ -195,6 +231,7 @@ def processar_sessao(
             detector=detector,
             config=config,
             fabrica_de_bytetrack=fabrica_de_bytetrack,
+            ao_gerar_evento=ao_gerar,
         )
 
         if resultado.motivo is not None:
@@ -202,23 +239,11 @@ def processar_sessao(
                 MinutoNaoProcessado(minuto=minuto, motivo=resultado.motivo)
             )
             anterior = None
+            if ao_descartar_minuto is not None:
+                ao_descartar_minuto(minuto)
             if ao_resolver_minuto is not None:
                 ao_resolver_minuto(minuto)
             continue
-
-        if anterior is None:
-            aceitos = resultado.eventos
-        else:
-            minuto_anterior, clipe_anterior = anterior
-            aceitos = deduplicar(
-                clipe_anterior.eventos,
-                resultado.eventos,
-                adjacentes=(minuto == minuto_anterior + 1),
-                fps_do_clipe_anterior=clipe_anterior.fps,
-                duracao_do_clipe_anterior=clipe_anterior.duracao_em_segundos,
-                fps_do_clipe_atual=resultado.fps,
-                config=config,
-            )
 
         eventos.extend(aceitos)
         processados.append(minuto)
