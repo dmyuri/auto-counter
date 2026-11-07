@@ -35,11 +35,19 @@ Critérios de aceite:
   AC-010.1 — Dado uma sessão gravada, quando a exportação é executada, então é
   gerado um arquivo XLSX com exatamente três abas, nomeadas Eventos, PorMinuto e
   Sessao, cujo nome de arquivo identifica câmera, data, hora de início e duração.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o nome do arquivo passa a ter `_upload` antes do
+  > sufixo de status e a data e a hora do início do processamento (AC-030.3).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-010.2 — Dado a aba Eventos, quando a planilha é gerada, então ela tem uma
   linha por cruzamento com timestamp, categoria, sentido, id de rastreio e
   confiança, e o número de linhas é igual ao número de eventos daquela sessão no
   banco.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, a aba Eventos passa a trazer o nome do vídeo e o
+  > deslocamento do cruzamento no lugar da data e da hora (AC-030.5).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-010.3 — Dado a aba PorMinuto, quando a planilha é gerada, então ela tem uma
   linha por minuto do período, com uma coluna para cada combinação de sentido e
@@ -50,11 +58,19 @@ Critérios de aceite:
   nome da câmera, os rótulos dos dois sentidos, período real, duração pedida,
   duração real, encerramento pelo usuário, status, lista dos minutos perdidos,
   versão do modelo, taxa de amostragem e limiar de confiança.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > A aba passa a trazer a origem da sessão e, na sessão de upload, a lista de
+  > vídeos e o período marcado como "horário do processamento" (AC-030.3).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-010.5 — Dado uma sessão com status DEGRADADA ou INVÁLIDA, quando a planilha
   é gerada, então o status e o percentual de minutos perdidos aparecem na
   primeira linha de cada uma das três abas e o status também aparece no nome do
   arquivo gerado.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o percentual passa a ser calculado sobre os minutos
+  > sem dado por falha de leitura (AC-030.4 e SUP-095).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-010.6 — Dado a mesma sessão exportada duas vezes, quando as duas planilhas
   são comparadas, então o conteúdo das três abas é idêntico.
