@@ -32,10 +32,20 @@ Critérios de aceite:
   duração real, indicação de encerramento pelo usuário, status, quantidade e
   lista dos minutos perdidos, versão do modelo, taxa de amostragem e limiar de
   confiança usados.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > O registro de sessão passa a ter a origem, CAMERA ou UPLOAD, e, na sessão
+  > de upload, a lista de vídeos com nome, posição, duração, sha256 e minutos
+  > ocupados, pela migration 003 (AC-030.1 e SUP-096).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-008.2 — Dado os cruzamentos detectados numa sessão, quando eles são
   persistidos, então cada evento fica ligado ao id daquela sessão e guarda
   timestamp, categoria, sentido, id de rastreio e confiança.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o evento passa a guardar também o vídeo de origem e o
+  > deslocamento dentro dele, e o timestamp passa a ser uma posição na linha do
+  > tempo da sessão, e não hora real (SUP-100).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-008.3 — Dado os eventos de uma sessão, quando os agregados são calculados,
   então existe uma linha para cada minuto do período com a contagem por sentido e
@@ -62,6 +72,10 @@ Critérios de aceite:
   AC-009.2 — Dado várias sessões gravadas, quando o histórico é listado, então as
   sessões vêm ordenadas da mais recente para a mais antiga, cada uma com id da
   câmera, período real, status e total de veículos contados.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > A listagem passa a mostrar a origem de cada sessão, e o período de uma
+  > sessão de upload é o horário do processamento (AC-030.2 e AC-030.3).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
 ## Fora de escopo
 
