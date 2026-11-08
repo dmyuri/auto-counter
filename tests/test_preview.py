@@ -38,6 +38,7 @@ def frame() -> np.ndarray:
 
 def camera_com_linha(p1: tuple[int, int], p2: tuple[int, int]) -> Camera:
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id="000013",
         nome="Local de teste",
         sentido_a="Centro",

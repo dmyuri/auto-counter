@@ -179,6 +179,7 @@ class ServidorFalso:
 @pytest.fixture
 def camera() -> Camera:
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id=ID_CAMERA,
         nome="Av. Exemplo",
         sentido_a="centro",

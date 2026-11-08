@@ -35,6 +35,7 @@ B = "Centro"
 LAST_MODIFIED = datetime(2026, 9, 8, 20, 15, 0, tzinfo=timezone.utc)
 EXECUTADO_EM = datetime(2026, 10, 26, 12, 0, 5, tzinfo=timezone.utc)
 CAMERA = Camera(
+    resolucao={"largura": 1280, "altura": 720},
     id="000013",
     nome="Praça Renascença",
     sentido_a=A,

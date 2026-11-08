@@ -55,6 +55,7 @@ CRUZA_PARA_A_ESQUERDA = (DIREITA, ESQUERDA)
 
 def camera() -> Camera:
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id=ID_CAMERA,
         nome="Praça Renascença",
         sentido_a="Icaraí",

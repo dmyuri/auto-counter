@@ -143,6 +143,18 @@ def test_AC_002_4_camera_sem_linha_e_rejeitada_sem_herdar_linha_de_outra(
     assert (camera.linha.p1.x, camera.linha.p1.y) == (120, 400)
 
 
+def test_AC_001_2_arquivo_sem_resolucao_e_rejeitado_e_as_demais_seguem(diretorio_com):
+    diretorio = diretorio_com("valida_000013.yaml", "sem_resolucao.yaml")
+
+    registro = carregar_registro(diretorio)
+
+    assert [camera.id for camera in registro.cameras] == ["000013"]
+    rejeicao = rejeicao_de(registro, "sem_resolucao.yaml")
+    assert rejeicao is not None
+    assert "resolucao" in rejeicao.motivo
+    assert "sem_resolucao.yaml" in str(rejeicao)
+
+
 def test_registro_vazio_nao_e_erro(diretorio_com):
     registro = carregar_registro(diretorio_com())
 

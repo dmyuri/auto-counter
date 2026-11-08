@@ -61,6 +61,7 @@ CLASSE_COCO_POR_CATEGORIA = {
 
 def camera() -> Camera:
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id=ID_CAMERA,
         nome="Praça Renascença",
         sentido_a=A,

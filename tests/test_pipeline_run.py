@@ -69,6 +69,7 @@ from tests.test_counting_session import (
 def camera() -> Camera:
     """Câmera cuja linha cabe nos quadros 320x240 dos clipes dublê."""
     return Camera(
+        resolucao={"largura": 320, "altura": 240},
         id=ID_CAMERA,
         nome="Praça Renascença",
         sentido_a="CENTRO",

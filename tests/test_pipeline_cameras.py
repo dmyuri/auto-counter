@@ -27,6 +27,7 @@ CAMERA = {
     "sentido_a": "sentido A",
     "sentido_b": "sentido B",
     "linha": {"p1": {"x": 120, "y": 400}, "p2": {"x": 1160, "y": 420}},
+    "resolucao": {"largura": 1280, "altura": 720},
 }
 
 

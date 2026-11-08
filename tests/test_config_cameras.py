@@ -159,6 +159,18 @@ def test_AC_031_2_camera_000012_tem_id_nome_sentidos_distintos_e_linha_nao_degen
     )
 
 
+def test_SUP_086_camera_000013_declara_1280x720():
+    camera = _camera_do_registro("000013")
+
+    assert (camera.resolucao.largura, camera.resolucao.altura) == (1280, 720)
+
+
+def test_SUP_086_camera_000012_declara_1920x1080():
+    camera = _camera_do_registro("000012")
+
+    assert (camera.resolucao.largura, camera.resolucao.altura) == (1920, 1080)
+
+
 def test_AC_031_3_camera_000013_mantem_nome_sentidos_linha_e_previa():
     """A 000013 segue idêntica a antes da feature; pega edição acidental."""
     camera = _camera_do_registro("000013")

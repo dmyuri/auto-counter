@@ -56,6 +56,7 @@ def camera(p1=(100, 0), p2=(100, 200)) -> Camera:
     "saída" — ou reaproveitar os de outra câmera —, estes testes acusam.
     """
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id="000013",
         nome="Praça Renascença",
         sentido_a="CENTRO",

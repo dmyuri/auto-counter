@@ -80,6 +80,7 @@ CRUZA_PARA_A_ESQUERDA = (DIREITA, ESQUERDA)
 def camera() -> Camera:
     """A câmera do teste, com os rótulos de sentido dela (AC-001.1)."""
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id=ID_CAMERA,
         nome="Praça Renascença",
         sentido_a="CENTRO",

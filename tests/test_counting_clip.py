@@ -57,6 +57,7 @@ CLASSE_COCO_POR_CATEGORIA = {
 def camera() -> Camera:
     """A câmera do teste, com rótulos de sentido próprios dela (AC-001.1)."""
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id="000013",
         nome="Praça Renascença",
         sentido_a="CENTRO",

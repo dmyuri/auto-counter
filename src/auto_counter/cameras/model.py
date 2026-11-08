@@ -2,7 +2,9 @@
 
 Comportamento em `.spec/features/configuracao-camera/spec.md`: AC-001.2 (campo
 obrigatório ausente ou de tipo inválido), AC-002.3 (linha degenerada) e
-AC-002.4 (câmera sem linha não existe como modelo válido).
+AC-002.4 (câmera sem linha não existe como modelo válido). Por
+`upload-videos`, `resolucao` é obrigatória (SUP-086) e a linha é validada
+contra ela (nota de AC-002.2).
 
 Os erros daqui nomeiam o **campo**. Nomear o **arquivo** cabe ao registro, que
 é quem conhece o caminho de onde os dados vieram.
@@ -10,7 +12,18 @@ Os erros daqui nomeiam o **campo**. Nomear o **arquivo** cabe ao registro, que
 
 from typing import Any
 
-from pydantic import BaseModel, StrictInt, StrictStr, field_validator, model_validator
+from typing import Annotated
+
+from pydantic import (
+    BaseModel,
+    Field,
+    StrictInt,
+    StrictStr,
+    field_validator,
+    model_validator,
+)
+
+PositiveStrictInt = Annotated[int, Field(strict=True, gt=0)]
 
 
 class Ponto(BaseModel):
@@ -42,11 +55,19 @@ class Linha(BaseModel):
         return self
 
 
+class Resolucao(BaseModel):
+    """Resolução do frame em que a linha foi calibrada (SUP-086)."""
+
+    largura: PositiveStrictInt
+    altura: PositiveStrictInt
+
+
 class Camera(BaseModel):
     """Câmera cadastrada e calibrada.
 
     Todos os campos são obrigatórios, exceto `preview`, que é opcional por
-    `layout-interface` (SUP-066) e nunca invalida a câmera. Em particular `linha` não tem valor
+    `layout-interface` (SUP-066) e nunca invalida a câmera. `resolucao` é a do
+    frame da calibração (SUP-086) e a linha precisa caber nela (AC-002.2). Em particular `linha` não tem valor
     padrão, não é herdada e não é inferida em lugar nenhum do código: câmera
     sem linha não vira objeto válido (AC-002.4).
 
@@ -61,6 +82,7 @@ class Camera(BaseModel):
     sentido_a: StrictStr
     sentido_b: StrictStr
     linha: Linha
+    resolucao: Resolucao
     preview: str | None = None
     """Caminho da imagem de prévia, relativo ao diretório de configuração.
 
@@ -72,3 +94,19 @@ class Camera(BaseModel):
     @classmethod
     def _preview_que_nao_e_texto_vale_como_ausente(cls, valor: Any) -> str | None:
         return valor if isinstance(valor, str) else None
+
+    @model_validator(mode="after")
+    def _rejeita_linha_fora_da_resolucao(self) -> "Camera":
+        # Import local: `geometry` importa este módulo (import circular no topo).
+        from auto_counter.cameras.geometry import (
+            LinhaForaDoFrameError,
+            validar_linha_no_frame,
+        )
+
+        try:
+            validar_linha_no_frame(
+                self.linha, self.resolucao.largura, self.resolucao.altura
+            )
+        except LinhaForaDoFrameError as erro:
+            raise ValueError(str(erro)) from erro
+        return self

@@ -23,3 +23,5 @@ linha:
 # Imagem fixa exibida no cartao da interface (SUP-066 de layout-interface),
 # relativa a este diretorio. Opcional: sem ela, o cartao mostra "sem previa".
 preview: "000013-v3.png"
+# Resolucao do frame em que a linha foi calibrada (SUP-086).
+resolucao: {largura: 1280, altura: 720}
