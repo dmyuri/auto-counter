@@ -22,7 +22,10 @@ resultados) e um cabeçalho com o estado do sistema e o botão de tema: AC-019.1
 AC-019.6 (indicador e tema) e AC-023.5 a AC-023.7 (depois do resultado, só "Nova
 sessão" libera a configuração, e só nesta aba). A câmera é escolhida por
 cartões com id, nome e prévia: AC-020.1 a AC-020.6 (SUP-065 a SUP-067). A
-duração tem atalhos de 5, 10 e 15 minutos: AC-021.1 a AC-021.3. O tema é CSS injetado a cada
+duração tem atalhos de 5, 10 e 15 minutos: AC-021.1 a AC-021.3. O painel ao vivo
+mostra título, participação, taxa, tempo estimado e percentual (AC-022.1 a
+AC-022.7), e a sessão é encerrada por "Parar antecipadamente", no painel de
+Configuração, com confirmação (AC-023.1, SUP-071). O tema é CSS injetado a cada
 execução (SUP-062). A escolha de tema e a dispensa do resultado ficam em
 `st.session_state`: a interface não grava nada em disco (SUP-058, SUP-064,
 SUP-074).
@@ -281,10 +284,34 @@ def _quantidades(quantidades: Quantidades) -> None:
         coluna.metric(rotulo, valor)
 
 
-def _andamento(andamento: Andamento, data_dir: Path) -> None:
-    """A sessão em curso: fase, progresso e o botão de encerrar (AC-012.1/2)."""
+def _categorias(andamento: Andamento) -> None:
+    """Quantidade, participação e barra de cada categoria, e depois o total.
+
+    Só no processamento (AC-022.2). Os números já vêm prontos de `ler_progresso`
+    (SUP-038); a ordem das métricas é a de D-8 de `acompanhamento-ao-vivo`.
+    """
+    quantidades, participacoes = andamento.quantidades, andamento.participacoes
+    categorias = (
+        ("Carro", quantidades.carro, participacoes.carro),
+        ("Ônibus", quantidades.onibus, participacoes.onibus),
+        ("Caminhão", quantidades.caminhao, participacoes.caminhao),
+        ("Moto", quantidades.moto, participacoes.moto),
+    )
+    for coluna, (rotulo, quantidade, participacao) in zip(
+        st.columns(len(categorias)), categorias
+    ):
+        coluna.metric(rotulo, quantidade)
+        coluna.markdown(f"{participacao}%")
+        coluna.progress(participacao)
+    st.metric("Total", quantidades.total)
+
+
+def _andamento(andamento: Andamento) -> None:
+    """O painel ao vivo (D-16): título, fase, progresso, categorias e tempos."""
+    st.subheader(
+        f"Contagem ao vivo · {andamento.nome_camera or andamento.id_camera}"
+    )
     if andamento.fase is Fase.CAPTURA:
-        resolvidos = andamento.capturados + len(andamento.perdidos)
         st.markdown(
             f"**Capturando** — {andamento.capturados} de {andamento.pedidos} "
             f"minutos capturados, {len(andamento.perdidos)} perdidos"
@@ -293,26 +320,34 @@ def _andamento(andamento: Andamento, data_dir: Path) -> None:
             st.caption(
                 "Minutos perdidos: " + ", ".join(str(m) for m in andamento.perdidos)
             )
-        total = andamento.pedidos
     else:
-        resolvidos = andamento.processados
         st.markdown(
             f"**Processando** — {andamento.processados} de {andamento.a_processar} "
             f"minutos analisados"
         )
-        total = andamento.a_processar
-    st.progress(min(1.0, resolvidos / total) if total else 0.0)
+    st.progress(andamento.percentual)
+    st.markdown(f"{andamento.percentual}% concluído")
 
-    if andamento.quantidades is None:
+    if andamento.participacoes is None:
         st.info(AVISO_SEM_CONTAGEM_NA_CAPTURA)
     else:
-        _quantidades(andamento.quantidades)
+        _categorias(andamento)
+    st.markdown(andamento.taxa)
     st.markdown(f"Tempo decorrido: {formatar_tempo(andamento.tempo_decorrido)}")
+    estimado = (
+        "—"
+        if andamento.tempo_estimado is None
+        else formatar_tempo(andamento.tempo_estimado)
+    )
+    st.markdown(f"Tempo estimado: {estimado}")
 
+
+def _parar_antecipadamente(andamento: Andamento, data_dir: Path) -> None:
+    """O botão de encerrar, com confirmação, no lugar de "Iniciar sessão"."""
     if not andamento.pode_encerrar:
         return
     if not st.session_state.get(CHAVE_CONFIRMANDO, False):
-        st.button("Encerrar sessão", on_click=_pedir_confirmacao)
+        st.button("Parar antecipadamente", on_click=_pedir_confirmacao)
         return
     st.warning(AVISO_DE_ENCERRAR[andamento.fase])
     st.button("Confirmar encerramento", on_click=_confirmar, args=(data_dir,))
@@ -375,7 +410,7 @@ def _area_da_sessao(data_dir: Path, indicador_da_pagina: str) -> None:
 
     if progresso.situacao is Situacao.EM_ANDAMENTO:
         with st.container(border=True):
-            _andamento(progresso.andamento, data_dir)
+            _andamento(progresso.andamento)
     elif tela.resultado_na_tela:
         st.session_state[CHAVE_CONFIRMANDO] = False
         with st.container(border=True):
@@ -465,6 +500,11 @@ def _configuracao(
             on_click=_dispensar_resultado,
             args=(progresso.resultado.chave,),
         )
+        return
+
+    if progresso.situacao is Situacao.EM_ANDAMENTO:
+        # Sessão da interface: o botão de iniciar não é desenhado (AC-023.1).
+        _parar_antecipadamente(progresso.andamento, data_dir)
         return
 
     indisponivel = tela.sessao_em_andamento or id_escolhida is None
