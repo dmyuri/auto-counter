@@ -130,3 +130,22 @@ def test_normal_da_linha_e_unitaria_e_perpendicular_ao_vetor_p1_p2():
     dx, dy = 200 - 100, 300 - 100
     assert nx * dx + ny * dy == pytest.approx(0.0)
     assert nx * nx + ny * ny == pytest.approx(1.0)
+
+
+def test_AC_020_2_camera_sem_preview_e_valida_com_preview_none():
+    camera = Camera(**deepcopy(CAMERA_VALIDA))
+
+    assert camera.preview is None
+
+
+def test_AC_020_2_camera_com_preview_guarda_o_caminho_como_texto():
+    camera = Camera(**deepcopy(CAMERA_VALIDA), preview="previas/000013.png")
+
+    assert camera.preview == "previas/000013.png"
+
+
+@pytest.mark.parametrize("valor", [123, ["a.png"], {"x": 1}, None])
+def test_AC_020_2_preview_de_tipo_invalido_vale_como_ausente(valor):
+    camera = Camera(**deepcopy(CAMERA_VALIDA), preview=valor)
+
+    assert camera.preview is None

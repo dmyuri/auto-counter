@@ -164,3 +164,20 @@ def test_diretorio_inexistente_falha_com_erro_explicito(tmp_path):
     arquivo.write_text("", encoding="utf-8")
     with pytest.raises(DiretorioDeRegistroInvalidoError):
         carregar_registro(arquivo)
+
+
+@pytest.mark.parametrize("preview", ["123", '"nao_existe.png"'])
+def test_AC_001_2_preview_ausente_ou_de_tipo_invalido_nao_rejeita_o_arquivo(
+    diretorio_com, preview
+):
+    diretorio = diretorio_com("valida_000013.yaml")
+    arquivo = diretorio / "valida_000013.yaml"
+    arquivo.write_text(
+        arquivo.read_text(encoding="utf-8") + f"\npreview: {preview}\n",
+        encoding="utf-8",
+    )
+
+    registro = carregar_registro(diretorio)
+
+    assert registro.rejeicoes == []
+    assert [camera.id for camera in registro.cameras] == ["000013"]
