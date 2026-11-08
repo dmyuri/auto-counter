@@ -7,6 +7,7 @@ Trava e estado são montados à mão em `tmp_path`: "vivo" é o próprio process
 teste e "morto" é um filho que já terminou. Nada aqui toca a rede.
 """
 
+import json
 import os
 import subprocess
 import sys
@@ -22,6 +23,7 @@ from auto_counter.pipeline.progress import (
     MENSAGEM_PROCESSO_MORREU,
     Quantidades,
     Situacao,
+    formatar_taxa,
     formatar_tempo,
     ler_progresso,
 )
@@ -529,3 +531,244 @@ def test_AC_018_4_processo_morto_nao_traz_quantidades_nem_tempo(tmp_path):
     assert resultado.mensagem == MENSAGEM_PROCESSO_MORREU
     assert resultado.quantidades is None
     assert resultado.tempo_total is None
+
+
+# --- layout-interface: percentual, participação, taxa e tempo estimado (T-06) ---
+
+
+class Relogio:
+    """Relógio do anotador, movido à mão pelo teste."""
+
+    def __init__(self, instante: datetime = INICIO) -> None:
+        self.instante = instante
+
+    def __call__(self) -> datetime:
+        return self.instante
+
+
+def sessao_em_processamento(
+    data_dir, *, a_processar, minutos_com_eventos=(), relogio=None
+) -> AnotadorDoEstado:
+    """Sessão no processamento com `a_processar` minutos.
+
+    Cada item de `minutos_com_eventos` é um minuto já concluído, com essa
+    quantidade de carros.
+    """
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=a_processar,
+        iniciada_em=INICIO,
+        agora=relogio or Relogio(),
+    )
+    a.iniciar()
+    for minuto in range(1, a_processar + 1):
+        a.minuto_da_captura(minuto, True)
+    a.processamento_iniciado(ID_SESSAO, a_processar)
+    for minuto, quantos in enumerate(minutos_com_eventos, start=1):
+        a.minuto_iniciado()
+        for _ in range(quantos):
+            a.evento_aceito(minuto, Categoria.CARRO)
+        a.minuto_processado()
+    return a
+
+
+def com_eventos(a: AnotadorDoEstado, quantidades: dict[Categoria, int]) -> None:
+    for categoria, quantos in quantidades.items():
+        for _ in range(quantos):
+            a.evento_aceito(1, categoria)
+
+
+def andamento_de(data_dir, *, agora=None):
+    with trava_do_run(data_dir):
+        return ler_progresso(data_dir, agora=agora).andamento
+
+
+def participacoes_de(data_dir) -> tuple[int, int, int, int]:
+    p = andamento_de(data_dir).participacoes
+    return (p.carro, p.onibus, p.caminhao, p.moto)
+
+
+def test_AC_022_2_participacao_arredonda_ao_inteiro_com_meio_para_cima(tmp_path):
+    a = sessao_em_processamento(tmp_path, a_processar=2)
+    # 1/8 = 12,5 -> 13 e 3/8 = 37,5 -> 38
+    com_eventos(
+        a,
+        {
+            Categoria.CARRO: 1,
+            Categoria.ONIBUS: 3,
+            Categoria.CAMINHAO: 1,
+            Categoria.MOTO: 3,
+        },
+    )
+
+    assert participacoes_de(tmp_path) == (13, 38, 13, 38)
+
+
+def test_AC_022_2_participacao_de_um_terco_e_33(tmp_path):
+    a = sessao_em_processamento(tmp_path, a_processar=2)
+    com_eventos(
+        a, {Categoria.CARRO: 1, Categoria.ONIBUS: 1, Categoria.CAMINHAO: 1}
+    )
+
+    assert participacoes_de(tmp_path) == (33, 33, 33, 0)
+
+
+def test_AC_022_2_total_zero_da_zero_por_cento_em_todas(tmp_path):
+    sessao_em_processamento(tmp_path, a_processar=2)
+
+    assert participacoes_de(tmp_path) == (0, 0, 0, 0)
+
+
+def test_AC_022_7_captura_nao_tem_participacoes(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    assert andamento_de(tmp_path).participacoes is None
+
+
+@pytest.mark.parametrize(
+    ("por_minuto", "esperado"),
+    [
+        ((1, 0, 0, 0), "0,3 veíc/min"),  # 1/4 = 0,25 -> 0,3
+        ((12, 12, 13), "12,3 veíc/min"),  # 37/3
+        ((0, 0), "0,0 veíc/min"),
+    ],
+)
+def test_AC_022_3_taxa_e_v_sobre_k_com_virgula_e_meio_para_cima(
+    tmp_path, por_minuto, esperado
+):
+    sessao_em_processamento(
+        tmp_path, a_processar=len(por_minuto) + 1, minutos_com_eventos=por_minuto
+    )
+
+    assert andamento_de(tmp_path).taxa == esperado
+
+
+def test_AC_022_3_sem_minuto_concluido_com_dado_mostra_traco(tmp_path):
+    sessao_em_processamento(tmp_path, a_processar=2)
+
+    assert andamento_de(tmp_path).taxa == "— veíc/min"
+
+
+def test_AC_022_3_captura_mostra_traco(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    assert andamento_de(tmp_path).taxa == "— veíc/min"
+
+
+def test_AC_022_3_minuto_em_analise_nao_entra_na_taxa(tmp_path):
+    a = sessao_em_processamento(tmp_path, a_processar=3, minutos_com_eventos=(4,))
+    antes = andamento_de(tmp_path).taxa
+
+    a.minuto_iniciado()
+    com_eventos(a, {Categoria.CARRO: 9})
+
+    assert antes == "4,0 veíc/min"
+    assert andamento_de(tmp_path).taxa == antes
+
+
+def test_formatar_taxa_regras_de_r1():
+    assert formatar_taxa(1, 4) == "0,3 veíc/min"
+    assert formatar_taxa(37, 3) == "12,3 veíc/min"
+    assert formatar_taxa(0, 2) == "0,0 veíc/min"
+    assert formatar_taxa(5, 0) == "— veíc/min"
+    assert formatar_taxa(0, 0) == "— veíc/min"
+
+
+def test_AC_022_4_percentual_da_captura_conta_capturados_e_perdidos(tmp_path):
+    a = anotador(tmp_path, duracao_pedida=7)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, False)
+    a.minuto_da_captura(3, True)
+
+    assert andamento_de(tmp_path).percentual == 42  # 3/7 = 42,8
+
+
+@pytest.mark.parametrize(("processados", "esperado"), [(1, 33), (2, 66)])
+def test_AC_022_4_percentual_do_processamento_e_piso(tmp_path, processados, esperado):
+    sessao_em_processamento(
+        tmp_path, a_processar=3, minutos_com_eventos=(0,) * processados
+    )
+
+    assert andamento_de(tmp_path).percentual == esperado
+
+
+def test_AC_022_1_o_andamento_traz_o_id_da_camera(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+
+    assert andamento_de(tmp_path).id_camera == "000013"
+
+
+def test_AC_022_5_tempo_estimado_da_captura(tmp_path):
+    a = anotador(tmp_path, duracao_pedida=5)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, False)
+
+    andamento = andamento_de(tmp_path, agora=INICIO + timedelta(seconds=130.7))
+
+    # max(0, 300 - 130,7) + 4 * 80 = 489,3
+    assert andamento.tempo_estimado == 489
+
+
+def test_AC_022_5_captura_passada_da_duracao_nao_fica_negativa(tmp_path):
+    a = anotador(tmp_path, duracao_pedida=5)
+    a.iniciar()
+    a.minuto_da_captura(1, False)
+
+    andamento = andamento_de(tmp_path, agora=INICIO + timedelta(seconds=400))
+
+    assert andamento.tempo_estimado == 4 * 80
+
+
+def processando_ha(tmp_path, *, a_processar, processados, segundos):
+    """Sessão no processamento com `processados` minutos prontos e o seguinte em
+    análise há `segundos` segundos. Devolve o `agora` da leitura."""
+    relogio = Relogio(INICIO + timedelta(minutes=10))
+    a = sessao_em_processamento(
+        tmp_path,
+        a_processar=a_processar,
+        minutos_com_eventos=(0,) * processados,
+        relogio=relogio,
+    )
+    a.minuto_iniciado()
+    return relogio.instante + timedelta(seconds=segundos)
+
+
+def test_AC_022_6_tempo_estimado_do_processamento_desconta_o_minuto_em_analise(
+    tmp_path,
+):
+    agora = processando_ha(tmp_path, a_processar=3, processados=1, segundos=30.5)
+
+    # max(80, 160 - 30,5) = 129,5
+    assert andamento_de(tmp_path, agora=agora).tempo_estimado == 129
+
+
+def test_AC_022_6_minuto_que_passa_do_orcamento_para_no_estimado_seguinte(tmp_path):
+    agora = processando_ha(tmp_path, a_processar=3, processados=1, segundos=200)
+
+    assert andamento_de(tmp_path, agora=agora).tempo_estimado == 80
+
+
+def test_AC_022_6_todos_os_minutos_analisados_da_zero(tmp_path):
+    agora = processando_ha(tmp_path, a_processar=2, processados=2, segundos=5)
+
+    assert andamento_de(tmp_path, agora=agora).tempo_estimado == 0
+
+
+def test_AC_022_6_estado_sem_tm_da_tempo_estimado_none(tmp_path):
+    sessao_em_processamento(tmp_path, a_processar=3)
+    caminho = tmp_path / "sessao_atual.json"
+    dados = json.loads(caminho.read_text(encoding="utf-8"))
+    dados["minuto_em_analise_desde"] = None
+    caminho.write_text(json.dumps(dados), encoding="utf-8")
+
+    assert andamento_de(tmp_path).tempo_estimado is None
