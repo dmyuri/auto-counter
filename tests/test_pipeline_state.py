@@ -333,3 +333,126 @@ def test_falha_ao_regravar_por_evento_nao_levanta(tmp_path, monkeypatch):
     a.minuto_descartado(1)
 
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+# --- layout-interface: Tm, minutos com dado e veículos por minuto (T-02) ---
+
+
+class RelogioMutavel:
+    def __init__(self, instante: datetime) -> None:
+        self.instante = instante
+
+    def __call__(self) -> datetime:
+        return self.instante
+
+
+def test_AC_022_6_minuto_iniciado_grava_tm_do_relogio_injetado(tmp_path):
+    relogio = RelogioMutavel(INICIO + timedelta(minutes=6))
+    a = anotador_em_processamento(tmp_path, agora=relogio)
+
+    a.minuto_iniciado()
+    assert ler_estado(tmp_path).minuto_em_analise_desde == relogio.instante
+
+    a.minuto_processado()
+    relogio.instante = INICIO + timedelta(minutes=7, seconds=21)
+    a.minuto_iniciado()
+
+    assert ler_estado(tmp_path).minuto_em_analise_desde == relogio.instante
+
+
+def test_AC_022_6_captura_nao_grava_tm(tmp_path):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    assert ler_estado(tmp_path).minuto_em_analise_desde is None
+    bruto = json.loads((tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8"))
+    assert bruto["minuto_em_analise_desde"] is None
+
+
+def test_AC_022_3_minuto_concluido_com_dado_soma_k_e_grava_v(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+
+    a.minuto_iniciado()
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.MOTO)
+    a.minuto_processado()
+    estado = ler_estado(tmp_path)
+    assert (estado.minutos_com_dado, estado.veiculos_nos_minutos_com_dado) == (1, 2)
+
+    a.minuto_iniciado()
+    a.evento_aceito(2, Categoria.ONIBUS)
+    a.minuto_processado()
+    estado = ler_estado(tmp_path)
+    assert (estado.minutos_com_dado, estado.veiculos_nos_minutos_com_dado) == (2, 3)
+
+
+def test_AC_022_3_minuto_descartado_nao_entra_em_k_nem_em_v(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+    a.minuto_iniciado()
+    a.evento_aceito(1, Categoria.CARRO)
+    a.minuto_processado()
+
+    a.minuto_iniciado()
+    a.evento_aceito(2, Categoria.CARRO)
+    a.minuto_descartado(2)
+    a.minuto_processado()
+
+    estado = ler_estado(tmp_path)
+    assert (estado.minutos_com_dado, estado.veiculos_nos_minutos_com_dado) == (1, 1)
+
+
+def test_AC_022_3_minuto_sem_evento_e_sem_descarte_conta_em_k(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+
+    a.minuto_iniciado()
+    a.minuto_processado()
+
+    estado = ler_estado(tmp_path)
+    assert (estado.minutos_com_dado, estado.veiculos_nos_minutos_com_dado) == (1, 0)
+
+
+def test_AC_022_3_evento_do_minuto_em_analise_nao_entra_em_v(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+    a.minuto_iniciado()
+
+    a.evento_aceito(1, Categoria.CARRO)
+
+    estado = ler_estado(tmp_path)
+    assert estado.veiculos_nos_minutos_com_dado == 0
+    assert estado.minutos_com_dado == 0
+
+
+def test_estado_de_versao_anterior_sem_tm_e_sem_k_e_lido_sem_falhar(tmp_path):
+    a = anotador_em_processamento(tmp_path)
+    caminho = tmp_path / NOME_DO_ESTADO
+    dados = json.loads(caminho.read_text(encoding="utf-8"))
+    for campo in (
+        "minuto_em_analise_desde",
+        "minutos_com_dado",
+        "veiculos_nos_minutos_com_dado",
+    ):
+        del dados[campo]
+    caminho.write_text(json.dumps(dados), encoding="utf-8")
+
+    estado = ler_estado(tmp_path)
+
+    assert estado is not None
+    assert estado.minuto_em_analise_desde is None
+    assert estado.minutos_com_dado == 0
+    assert estado.veiculos_nos_minutos_com_dado == 0
+
+
+def test_falha_ao_regravar_tm_nao_levanta(tmp_path, monkeypatch):
+    monkeypatch.setattr(state, "ESPERA_ENTRE_TENTATIVAS", 0)
+    a = anotador_em_processamento(tmp_path)
+
+    def negado(origem, destino):
+        raise OSError("disco cheio")
+
+    monkeypatch.setattr(state.os, "replace", negado)
+
+    a.minuto_iniciado()
+    a.minuto_processado()
+
+    assert list(tmp_path.glob("*.tmp")) == []
