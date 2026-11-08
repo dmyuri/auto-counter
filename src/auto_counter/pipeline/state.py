@@ -20,6 +20,12 @@ Por `acompanhamento-ao-vivo` (SUP-058), o arquivo também carrega as quantidades
 de veículos já contados por categoria (`quantidades`, `null` na captura) e o
 instante do desfecho (`terminada_em`, `null` até terminar). O total não é
 gravado: é a soma das quatro categorias, calculada por quem lê (SUP-054).
+
+Por `layout-interface` (SUP-069, SUP-070), o arquivo também carrega o instante Tm
+em que o minuto em análise começou a ser processado (`minuto_em_analise_desde`)
+e, para a taxa, quantos minutos já concluíram com dado (`minutos_com_dado`) e os
+veículos aceitos nesses minutos (`veiculos_nos_minutos_com_dado`). Arquivo de
+versão anterior não tem os três campos e é lido com `None`, 0 e 0.
 """
 
 import json
@@ -85,6 +91,13 @@ class EstadoDaSessao:
     `None` durante a captura (SUP-055); zeros a partir do processamento."""
     terminada_em: datetime | None = None
     """Instante UTC do desfecho; `None` até `terminar`."""
+    minuto_em_analise_desde: datetime | None = None
+    """Tm (SUP-070): instante UTC em que o minuto em análise começou a ser
+    processado. `None` na captura."""
+    minutos_com_dado: int = 0
+    """k (SUP-069): minutos já concluídos com dado, sem os descartados."""
+    veiculos_nos_minutos_com_dado: int = 0
+    """V (SUP-069): veículos aceitos nesses k minutos."""
 
 
 def _em_utc(instante: datetime) -> datetime:
@@ -131,6 +144,13 @@ def _como_dicionario(estado: EstadoDaSessao) -> dict:
             if estado.terminada_em is None
             else _em_utc(estado.terminada_em).isoformat()
         ),
+        "minuto_em_analise_desde": (
+            None
+            if estado.minuto_em_analise_desde is None
+            else _em_utc(estado.minuto_em_analise_desde).isoformat()
+        ),
+        "minutos_com_dado": estado.minutos_com_dado,
+        "veiculos_nos_minutos_com_dado": estado.veiculos_nos_minutos_com_dado,
     }
 
 
@@ -170,6 +190,16 @@ def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
                 if dados.get("terminada_em") is None
                 else _em_utc(datetime.fromisoformat(dados["terminada_em"]))
             ),
+            # Arquivo de versão anterior não tem os três campos abaixo.
+            minuto_em_analise_desde=(
+                None
+                if dados.get("minuto_em_analise_desde") is None
+                else _em_utc(datetime.fromisoformat(dados["minuto_em_analise_desde"]))
+            ),
+            minutos_com_dado=int(dados.get("minutos_com_dado", 0)),
+            veiculos_nos_minutos_com_dado=int(
+                dados.get("veiculos_nos_minutos_com_dado", 0)
+            ),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -198,6 +228,8 @@ class AnotadorDoEstado:
         # Quanto de cada categoria veio do minuto em curso (D-5). Só em
         # memória: se o processo morrer, a sessão termina sem resultado.
         self._do_minuto: dict[str, int] = {}
+        # O minuto em curso foi descartado? (D-3) Só em memória.
+        self._minuto_descartado = False
         self._estado = EstadoDaSessao(
             pid=pid,
             id_camera=id_camera,
@@ -240,6 +272,15 @@ class AnotadorDoEstado:
             quantidades={categoria.value: 0 for categoria in Categoria},
         )
         self._do_minuto = {}
+        self._minuto_descartado = False
+        self._gravar()
+
+    def minuto_iniciado(self) -> None:
+        """Grava Tm: o minuto em análise começa a ser processado (SUP-070)."""
+        self._minuto_descartado = False
+        self._estado = replace(
+            self._estado, minuto_em_analise_desde=_em_utc(self._agora())
+        )
         self._gravar()
 
     def evento_aceito(self, minuto: int, categoria: Categoria) -> None:
@@ -257,15 +298,24 @@ class AnotadorDoEstado:
         for chave, quantos in self._do_minuto.items():
             quantidades[chave] = quantidades.get(chave, 0) - quantos
         self._do_minuto = {}
+        self._minuto_descartado = True
         self._estado = replace(self._estado, quantidades=quantidades)
         self._gravar()
 
     def minuto_processado(self) -> None:
-        """Conta mais um minuto analisado (AC-012.2); o minuto vira definitivo."""
+        """Conta mais um minuto analisado (AC-012.2); o minuto vira definitivo.
+
+        Minuto com dado entra em k e em V; minuto descartado, não (SUP-069).
+        """
         self._do_minuto = {}
-        self._estado = replace(
-            self._estado, minutos_processados=self._estado.minutos_processados + 1
-        )
+        mudancas = {"minutos_processados": self._estado.minutos_processados + 1}
+        if not self._minuto_descartado:
+            mudancas["minutos_com_dado"] = self._estado.minutos_com_dado + 1
+            mudancas["veiculos_nos_minutos_com_dado"] = sum(
+                (self._estado.quantidades or {}).values()
+            )
+        self._minuto_descartado = False
+        self._estado = replace(self._estado, **mudancas)
         self._gravar()
 
     def terminar(

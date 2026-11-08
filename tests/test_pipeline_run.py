@@ -605,3 +605,80 @@ def test_AC_018_3_sem_planilha_grava_terminada_em(data_dir, modelo, clipes_legiv
 
     assert estado.fase is Fase.SEM_PLANILHA
     assert estado.terminada_em == relogio.agora()
+
+
+# --- layout-interface: Tm e minutos com dado de ponta a ponta (T-05) ---
+
+
+def test_AC_022_6_estado_grava_tm_quando_cada_minuto_comeca(
+    data_dir, modelo, clipes_legiveis, rastreador_duble, monkeypatch
+):
+    relogio = RelogioFalso()
+    fotos = []
+    original = AnotadorDoEstado.minuto_iniciado
+
+    def espiao(self):
+        # O relógio só anda quando mandado: cada minuto começa num instante novo.
+        relogio.avanca(7)
+        original(self)
+        fotos.append((ler_estado(data_dir).minuto_em_analise_desde, relogio.agora()))
+
+    monkeypatch.setattr(AnotadorDoEstado, "minuto_iniciado", espiao)
+
+    executa_com_cruzamentos(data_dir, relogio, clipes_legiveis, minutos=3)
+
+    assert len(fotos) == 3
+    assert all(gravado == do_relogio for gravado, do_relogio in fotos)
+    assert len({gravado for gravado, _ in fotos}) == 3
+
+
+def test_AC_022_3_estado_final_tem_k_e_v_iguais_aos_minutos_com_dado_e_ao_banco(
+    data_dir, modelo, clipes_legiveis, rastreador_duble
+):
+    relogio = RelogioFalso()
+    # Minuto 2 perdido na captura; o minuto 3 pega o clipe publicado em t=100.
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (100.0, "clipe-c")],
+        clipes_legiveis("clipe-a", "clipe-c"),
+    )
+
+    estado, _ = executa(
+        data_dir,
+        servidor,
+        relogio,
+        minutos=3,
+        criar_detector=lambda caminho, config: DetectorQueCruza(),
+    )
+
+    assert estado.fase is Fase.CONCLUIDA
+    final = ler_estado(data_dir)
+    assert final.minutos_perdidos == (2,)
+    assert final.minutos_com_dado == 2
+    banco = contagem_do_banco(data_dir, estado.id_sessao)
+    assert final.veiculos_nos_minutos_com_dado == sum(banco.values()) == 2
+
+
+def test_AC_022_3_clipe_que_falha_no_meio_fica_fora_de_k_de_ponta_a_ponta(
+    data_dir, modelo, clipes_legiveis, rastreador_duble, monkeypatch
+):
+    from auto_counter.counting import sampling
+
+    real = sampling.frames_amostrados
+
+    def falha_no_minuto_2(caminho, amostragem):
+        if Path(caminho).name == "minuto-02.mp4":
+            return AmostragemQueFalhaNoFim(caminho, amostragem)
+        return real(caminho, amostragem)
+
+    monkeypatch.setattr(
+        "auto_counter.counting.clip.frames_amostrados", falha_no_minuto_2
+    )
+
+    estado, _ = executa_com_cruzamentos(data_dir, RelogioFalso(), clipes_legiveis)
+
+    final = ler_estado(data_dir)
+    assert final.minutos_processados == 3
+    assert final.minutos_com_dado == 2
+    banco = contagem_do_banco(data_dir, estado.id_sessao)
+    assert final.veiculos_nos_minutos_com_dado == sum(banco.values()) == 2

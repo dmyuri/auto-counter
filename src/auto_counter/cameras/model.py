@@ -8,7 +8,9 @@ Os erros daqui nomeiam o **campo**. Nomear o **arquivo** cabe ao registro, que
 é quem conhece o caminho de onde os dados vieram.
 """
 
-from pydantic import BaseModel, StrictInt, StrictStr, model_validator
+from typing import Any
+
+from pydantic import BaseModel, StrictInt, StrictStr, field_validator, model_validator
 
 
 class Ponto(BaseModel):
@@ -43,7 +45,8 @@ class Linha(BaseModel):
 class Camera(BaseModel):
     """Câmera cadastrada e calibrada.
 
-    Todos os campos são obrigatórios. Em particular `linha` não tem valor
+    Todos os campos são obrigatórios, exceto `preview`, que é opcional por
+    `layout-interface` (SUP-066) e nunca invalida a câmera. Em particular `linha` não tem valor
     padrão, não é herdada e não é inferida em lugar nenhum do código: câmera
     sem linha não vira objeto válido (AC-002.4).
 
@@ -58,3 +61,14 @@ class Camera(BaseModel):
     sentido_a: StrictStr
     sentido_b: StrictStr
     linha: Linha
+    preview: str | None = None
+    """Caminho da imagem de prévia, relativo ao diretório de configuração.
+
+    Valor que não seja texto vale como campo ausente (R-2). Se o arquivo abre é
+    assunto de quem lê a imagem, não do modelo.
+    """
+
+    @field_validator("preview", mode="before")
+    @classmethod
+    def _preview_que_nao_e_texto_vale_como_ausente(cls, valor: Any) -> str | None:
+        return valor if isinstance(valor, str) else None

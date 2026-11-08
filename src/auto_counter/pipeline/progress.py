@@ -16,6 +16,13 @@ do disco (AC-012.4), por isso reabrir a interface mostra a mesma sessão.
 Por `acompanhamento-ao-vivo`, a leitura também devolve as quantidades por
 categoria e o tempo da sessão, já prontos para exibir: a interface só formata o
 que recebe daqui (SUP-038, SUP-058). O relógio é injetável em `agora` (D-7).
+
+Por `layout-interface`, a leitura também devolve o percentual da fase, a
+participação de cada categoria, a taxa e o tempo estimado (AC-022.2 a AC-022.6),
+todos calculados aqui com inteiros (D-1), para a interface só exibir (SUP-038).
+O resultado também traz a chave que o identifica (D-7), o número de registros
+gravados e a marca de encerramento pelo usuário (D-8), lidos do banco em modo
+somente leitura (AC-023.2, AC-023.6, AC-023.7).
 """
 
 import sqlite3
@@ -33,8 +40,21 @@ from auto_counter.pipeline.lock import (
 )
 from auto_counter.pipeline.state import EstadoDaSessao, Fase, ler_estado
 from auto_counter.storage.connection import caminho_do_banco
+from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.model import SessaoGravada
 from auto_counter.storage.sessions import ler_sessao
+
+ORCAMENTO_POR_MINUTO_EM_SEGUNDOS = 80
+"""Orçamento de processamento por minuto de vídeo (SUP-070).
+
+A conta é 59,93 s de clipe × 10 frames analisados por segundo ≈ 600 frames ×
+133 ms por frame = 79,8 s, arredondado para cima. O limite de 133 ms é o de
+AC-005.4 e os 10 frames por segundo são os de SUP-017, ambos de
+`contagem-veiculos`: se o orçamento mudar lá, muda aqui.
+"""
+
+TAXA_SEM_DADO = "— veíc/min"
+"""Taxa sem nenhum minuto concluído com dado, ou na captura (AC-022.3)."""
 
 MENSAGEM_PROCESSO_MORREU = "o processo da sessão terminou sem concluir"
 """D-9: estado não terminal sem trava viva é um processo que morreu."""
@@ -59,6 +79,57 @@ class Quantidades:
     @property
     def total(self) -> int:
         return self.carro + self.onibus + self.caminhao + self.moto
+
+
+@dataclass(frozen=True)
+class Participacoes:
+    """Participação de cada categoria no total, em % inteiros de 0 a 100.
+
+    Cada categoria é arredondada sozinha (meio para cima), então a soma pode não
+    dar 100 (AC-022.2).
+    """
+
+    carro: int
+    onibus: int
+    caminhao: int
+    moto: int
+
+
+def _participacao(quantidade: int, total: int) -> int:
+    """q/T × 100, arredondado com meio para cima, só com inteiros (D-1)."""
+    if total == 0:
+        return 0
+    return (200 * quantidade + total) // (2 * total)
+
+
+def _participacoes(quantidades: Quantidades | None) -> Participacoes | None:
+    if quantidades is None:
+        return None
+    total = quantidades.total
+    return Participacoes(
+        carro=_participacao(quantidades.carro, total),
+        onibus=_participacao(quantidades.onibus, total),
+        caminhao=_participacao(quantidades.caminhao, total),
+        moto=_participacao(quantidades.moto, total),
+    )
+
+
+def formatar_taxa(veiculos: int, minutos: int) -> str:
+    """V/k com uma casa decimal, vírgula e meio para cima (AC-022.3, R-1).
+
+    Com `minutos` = 0 não há taxa, e o texto é o traço.
+    """
+    if minutos <= 0:
+        return TAXA_SEM_DADO
+    decimos = (20 * veiculos + minutos) // (2 * minutos)
+    return f"{decimos // 10},{decimos % 10} veíc/min"
+
+
+def _percentual(resolvidos: int, total: int) -> int:
+    """⌊R/M × 100⌋ (AC-022.4); sem minutos a resolver, 0."""
+    if total <= 0:
+        return 0
+    return (100 * resolvidos) // total
 
 
 def formatar_tempo(segundos: int) -> str:
@@ -103,6 +174,17 @@ class Andamento:
     """`None` na captura (SUP-055); zeros a partir do processamento."""
     tempo_decorrido: int
     """Segundos desde T0, sem voltar a zero na troca de fase (AC-017.2)."""
+    id_camera: str
+    """Para o título do painel quando `nome_camera` for `None` (AC-022.1)."""
+    percentual: int
+    """P = ⌊R/M × 100⌋ da fase atual (AC-022.4)."""
+    participacoes: Participacoes | None
+    """`None` na captura (AC-022.7); no processamento, AC-022.2."""
+    taxa: str
+    """Texto pronto: `"X,Y veíc/min"` ou `"— veíc/min"` (AC-022.3)."""
+    tempo_estimado: int | None
+    """Segundos até o fim da sessão (AC-022.5, AC-022.6); `None` no
+    processamento sem o instante Tm (estado de versão anterior)."""
 
 
 @dataclass(frozen=True)
@@ -114,10 +196,25 @@ class Resultado:
     aviso: str | None
     planilha: Path | None
     mensagem: str | None
+    chave: str = ""
+    """Identidade do resultado: `<pid>:<iniciada_em>` do estado (D-7). Uma sessão
+    nova tem chave nova, então o que a aba dispensou ou baixou não vaza para ela."""
     quantidades: Quantidades | None = None
     """Só na sessão concluída (SUP-060)."""
     tempo_total: int | None = None
     """`None` sem instante de término: processo morto ou estado antigo."""
+    registros: int | None = None
+    """Eventos gravados da sessão (AC-008.2); só em `CONCLUIDA`. `None` se o
+    banco não pôde ser lido."""
+    encerrada_pelo_usuario: bool = False
+    """A sessão registra encerramento pelo usuário (AC-003.6); só em `CONCLUIDA`."""
+    nome_camera: str | None = None
+    id_camera: str = ""
+    """Para o título do painel ao vivo, que continua na tela depois do fim."""
+    participacoes: Participacoes | None = None
+    """Só na sessão concluída: é o que o painel ao vivo mostra no fim (AC-018.1)."""
+    taxa: str = TAXA_SEM_DADO
+    """Só na sessão concluída; nos demais desfechos, o traço (AC-018.3, AC-018.4)."""
 
 
 @dataclass(frozen=True)
@@ -128,7 +225,48 @@ class Progresso:
     resultado: Resultado | None = None
 
 
+def _tempo_estimado(estado: EstadoDaSessao, agora: datetime) -> int | None:
+    """Previsão pelo orçamento de processamento, e não pela velocidade medida.
+
+    Captura (AC-022.5): o que falta da duração pedida, contado de T0, mais o
+    orçamento de cada minuto que ainda vai ser processado (o perdido não entra).
+    Processamento (AC-022.6): o orçamento dos minutos que faltam, descontado o
+    tempo que o minuto em análise já gastou, sem cair abaixo do orçamento dos
+    minutos seguintes. Os segundos são fracionários; só o resultado é truncado.
+    """
+    orcamento = ORCAMENTO_POR_MINUTO_EM_SEGUNDOS
+    if estado.fase is Fase.CAPTURA:
+        pedidos = estado.duracao_pedida
+        decorrido = (agora - estado.iniciada_em).total_seconds()
+        a_capturar = max(0, pedidos * 60 - decorrido)
+        a_processar = (pedidos - len(estado.minutos_perdidos)) * orcamento
+        return int(a_capturar + a_processar)
+
+    faltam = estado.minutos_a_processar - estado.minutos_processados
+    if faltam <= 0:
+        return 0
+    if estado.minuto_em_analise_desde is None:
+        return None
+    gasto = (agora - estado.minuto_em_analise_desde).total_seconds()
+    return int(max((faltam - 1) * orcamento, faltam * orcamento - gasto))
+
+
 def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
+    quantidades = _quantidades(estado)
+    na_captura = estado.fase is Fase.CAPTURA
+    if na_captura:
+        percentual = _percentual(
+            len(estado.minutos_capturados) + len(estado.minutos_perdidos),
+            estado.duracao_pedida,
+        )
+        taxa = TAXA_SEM_DADO
+    else:
+        percentual = _percentual(
+            estado.minutos_processados, estado.minutos_a_processar
+        )
+        taxa = formatar_taxa(
+            estado.veiculos_nos_minutos_com_dado, estado.minutos_com_dado
+        )
     return Andamento(
         nome_camera=estado.nome_camera,
         fase=estado.fase,
@@ -138,13 +276,23 @@ def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
         processados=estado.minutos_processados,
         a_processar=estado.minutos_a_processar,
         pode_encerrar=not estado.fase.terminal,
-        quantidades=_quantidades(estado),
+        quantidades=quantidades,
         tempo_decorrido=_segundos(estado.iniciada_em, agora),
+        id_camera=estado.id_camera,
+        percentual=percentual,
+        participacoes=None if na_captura else _participacoes(quantidades),
+        taxa=taxa,
+        tempo_estimado=_tempo_estimado(estado, agora),
     )
 
 
-def _sessao_do_banco(data_dir: Path, id_sessao: str | None) -> SessaoGravada | None:
-    """A linha da sessão, lida em modo somente leitura; `None` se não der."""
+def _sessao_do_banco(
+    data_dir: Path, id_sessao: str | None
+) -> tuple[SessaoGravada, int] | None:
+    """A sessão e o número dos seus eventos, na mesma conexão somente leitura.
+
+    `None` se o banco não existe, não abre ou não tem a sessão (D-8).
+    """
     caminho = caminho_do_banco(data_dir)
     if id_sessao is None or not caminho.is_file():
         return None
@@ -152,14 +300,21 @@ def _sessao_do_banco(data_dir: Path, id_sessao: str | None) -> SessaoGravada | N
         conexao = sqlite3.connect(f"{caminho.as_uri()}?mode=ro", uri=True)
         try:
             conexao.row_factory = sqlite3.Row
-            return ler_sessao(conexao, id_sessao)
+            sessao = ler_sessao(conexao, id_sessao)
+            return sessao, contar_eventos(conexao, id_sessao)
         finally:
             conexao.close()
     except (sqlite3.Error, KeyError):
         return None
 
 
+def _chave(estado: EstadoDaSessao) -> str:
+    """D-7: `<pid>:<iniciada_em>`, estável entre leituras do mesmo resultado."""
+    return f"{estado.pid}:{estado.iniciada_em.isoformat()}"
+
+
 def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
+    chave = _chave(estado)
     if not estado.fase.terminal:
         return Resultado(
             fase=Fase.FALHOU,
@@ -167,6 +322,9 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             aviso=None,
             planilha=None,
             mensagem=MENSAGEM_PROCESSO_MORREU,
+            chave=chave,
+            nome_camera=estado.nome_camera,
+            id_camera=estado.id_camera,
         )
 
     tempo_total = (
@@ -182,16 +340,21 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             aviso=None,
             planilha=None,
             mensagem=estado.mensagem,
+            chave=chave,
             tempo_total=tempo_total,
+            nome_camera=estado.nome_camera,
+            id_camera=estado.id_camera,
         )
 
-    sessao = _sessao_do_banco(data_dir, estado.id_sessao)
+    do_banco = _sessao_do_banco(data_dir, estado.id_sessao)
+    sessao, registros = (None, None) if do_banco is None else do_banco
     status = estado.status
     aviso = None
     if sessao is not None and sessao.status is not None:
         status = sessao.status.value
         aviso = linha_de_aviso(sessao)
 
+    quantidades = _quantidades(estado)
     planilha = Path(estado.planilha) if estado.planilha else None
     mensagem = estado.mensagem
     if planilha is not None and not planilha.is_file():
@@ -203,8 +366,19 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         aviso=aviso,
         planilha=planilha,
         mensagem=mensagem,
-        quantidades=_quantidades(estado),
+        chave=chave,
+        quantidades=quantidades,
         tempo_total=tempo_total,
+        registros=registros,
+        encerrada_pelo_usuario=(
+            False if sessao is None else sessao.encerrada_pelo_usuario
+        ),
+        nome_camera=estado.nome_camera,
+        id_camera=estado.id_camera,
+        participacoes=_participacoes(quantidades),
+        taxa=formatar_taxa(
+            estado.veiculos_nos_minutos_com_dado, estado.minutos_com_dado
+        ),
     )
 
 

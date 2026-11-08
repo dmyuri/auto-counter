@@ -237,3 +237,48 @@ def test_session_process_continua_sem_anotar_quantidades(
 
     assert resultado.exit_code == 0, resultado.output
     assert not (data_dir / NOME_DO_ESTADO).exists()
+
+
+def test_AC_022_6_processar_repassa_ao_iniciar_minuto_a_processar_sessao(
+    data_dir, monkeypatch
+):
+    recebidos = {}
+
+    def espiao(dir_sessao, **kwargs):
+        recebidos.update(kwargs)
+
+    monkeypatch.setattr("auto_counter.pipeline.processing.processar_sessao", espiao)
+
+    def iniciar(minuto):
+        pass
+
+    roda_processar(monta_sessao(data_dir), ao_iniciar_minuto=iniciar)
+
+    assert recebidos["ao_iniciar_minuto"] is iniciar
+
+
+def test_AC_022_6_sem_o_gancho_processar_nao_passa_ao_iniciar_minuto(
+    data_dir, monkeypatch
+):
+    recebidos = {}
+
+    def espiao(dir_sessao, **kwargs):
+        recebidos.update(kwargs)
+
+    monkeypatch.setattr("auto_counter.pipeline.processing.processar_sessao", espiao)
+
+    roda_processar(monta_sessao(data_dir))
+
+    assert recebidos["ao_iniciar_minuto"] is None
+
+
+def test_session_process_continua_sem_gravar_tm(
+    runner, registro, data_dir, modelo, detector
+):
+    """`session process` não passa o gancho: o estado, com Tm, nunca é gravado."""
+    monta_sessao(data_dir)
+
+    resultado = processa(runner, registro)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert not (data_dir / NOME_DO_ESTADO).exists()

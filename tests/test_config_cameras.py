@@ -94,3 +94,8 @@ def test_AC_001_4_arquivo_da_000013_nao_declara_url():
 
     assert "http://" not in conteudo
     assert "https://" not in conteudo
+
+
+def test_AC_020_2_camera_000013_do_registro_declara_a_previa():
+    """A prévia provisória da 000013 (R-3) está declarada no registro versionado."""
+    assert _camera_do_mvp().preview == "000013-v3.png"

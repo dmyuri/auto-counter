@@ -15,7 +15,9 @@ espera, cliente HTTP, detector e parada — entra por parâmetro, como em
 O desfecho de cada fase é gravado no estado da sessão (`sessao_atual.json`).
 Por `acompanhamento-ao-vivo`, o estado também recebe cada evento aceito, o
 desconto de um minuto que falhou e o instante do desfecho, medido pelo mesmo
-relógio `agora` que marcou o início. As
+relógio `agora` que marcou o início. Por `layout-interface` (SUP-069,
+SUP-070), o estado também recebe o instante em que cada minuto começa a ser
+processado e os minutos concluídos com dado. As
 exceções inesperadas marcam o estado como `FALHOU` e sobem, para o comando
 traduzi-las em mensagem e código de saída.
 """
@@ -154,6 +156,7 @@ def executar_sessao(
                     minuto, evento.categoria
                 ),
                 ao_descartar_minuto=anotador.minuto_descartado,
+                ao_iniciar_minuto=lambda _minuto: anotador.minuto_iniciado(),
             )
         except ProcessamentoCancelado:
             anotador.terminar(

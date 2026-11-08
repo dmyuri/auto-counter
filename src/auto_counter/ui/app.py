@@ -17,6 +17,21 @@ sessão: AC-016.1 e AC-016.5 (quantidades no processamento, aviso na captura),
 AC-017.1 (tempo decorrido) e AC-018.1 a AC-018.4 (quantidades finais e tempo
 total no resultado). A tela só exibe o que `ler_progresso` devolve (SUP-058).
 
+E, por `layout-interface`, a tela tem três painéis (Configuração, ao vivo e
+resultados) e um cabeçalho com o estado do sistema e o botão de tema: AC-019.1 a
+AC-019.6 (indicador e tema) e AC-023.5 a AC-023.7 (depois do resultado, só "Nova
+sessão" libera a configuração, e só nesta aba). A câmera é escolhida por
+cartões com id, nome e prévia: AC-020.1 a AC-020.6 (SUP-065 a SUP-067). A
+duração tem atalhos de 5, 10 e 15 minutos: AC-021.1 a AC-021.3. O painel ao vivo
+mostra título, participação, taxa, tempo estimado e percentual (AC-022.1 a
+AC-022.7), e a sessão é encerrada por "Parar antecipadamente", no painel de
+Configuração, com confirmação (AC-023.1, SUP-071). O resultado é o painel
+"Sessão finalizada", com o cartão da planilha e a marca "✓ Baixado" (AC-023.2 a
+AC-023.4, SUP-073, SUP-075). O tema é CSS injetado a cada
+execução (SUP-062). A escolha de tema e a dispensa do resultado ficam em
+`st.session_state`: a interface não grava nada em disco (SUP-058, SUP-064,
+SUP-074).
+
 Esta é só a casca (SUP-038): nenhuma regra de captura, contagem ou exportação
 mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 `auto_counter.pipeline`, e é o `pipeline` que lê o progresso e dispara a sessão.
@@ -24,6 +39,7 @@ mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
@@ -37,10 +53,14 @@ from auto_counter.pipeline.cameras import (
     DURACAO_MINIMA,
     DURACAO_PADRAO,
     cameras_disponiveis,
+    previa_da_camera,
 )
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
+    TAXA_SEM_DADO,
     Andamento,
+    Participacoes,
+    Progresso,
     Quantidades,
     Resultado,
     Situacao,
@@ -54,14 +74,376 @@ MIME_DO_XLSX = (
 )
 
 ATUALIZACAO_EM_SEGUNDOS = 2
-"""De quanto em quanto tempo a área da sessão se relê do disco (D-17)."""
+# De quanto em quanto tempo a área da sessão se relê do disco (D-17).
 
 CHAVE_CONFIRMANDO = "confirmando_encerramento"
+CHAVE_TEMA = "tema"
+CHAVE_DURACAO = "duracao"
+ATALHOS_DE_DURACAO = (5, 10, 15)
+# Os atalhos só escolhem valores dentro de 1 a 15 minutos (AC-011.2, D-15).
+CHAVE_PLANILHA_BAIXADA = "planilha_baixada"
+# A `chave` do resultado cuja planilha foi baixada nesta aba (D-9, SUP-073).
+CHAVE_CAMERA = "camera"
+# O id da câmera selecionada nesta aba; padrão, a primeira do registro (D-13).
+CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
+# A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074).
+
+TEMA_ESCURO = "escuro"
+TEMA_CLARO = "claro"
+
+VARIAVEIS_DO_TEMA_ESCURO = {
+    "--bg": "#0c0e0d",
+    "--panel": "#141715",
+    "--panel2": "#1a1e1b",
+    "--line": "#262b28",
+    "--ink": "#eef1ee",
+    "--muted": "#8d958f",
+    "--accent": "oklch(0.83 0.19 150)",
+    "--accentInk": "#05130a",
+    "--accentSoft": "oklch(0.83 0.19 150 / 0.12)",
+    "--danger": "oklch(0.7 0.18 25)",
+    "--stripe": "#1d211e",
+}
+VARIAVEIS_DO_TEMA_CLARO = {
+    "--bg": "#f3f4f2",
+    "--panel": "#ffffff",
+    "--panel2": "#f7f8f6",
+    "--line": "#dde1dc",
+    "--ink": "#111412",
+    "--muted": "#596159",
+    "--accent": "oklch(0.52 0.15 150)",
+    "--accentInk": "#ffffff",
+    "--accentSoft": "oklch(0.52 0.15 150 / 0.1)",
+    "--danger": "oklch(0.55 0.19 25)",
+    "--stripe": "#eceee9",
+}
+# As cores dos dois temas, copiadas do protótipo (D-12, SUP-062).
+
+CSS_DOS_COMPONENTES = """
+/* base */
+.stApp {
+  background: var(--bg); color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+  font-size: 15px; line-height: 1.45;
+}
+[data-testid="stHeader"], [data-testid="stToolbar"],
+[data-testid="stAppDeployButton"] { display: none; }
+[data-testid="stMainBlockContainer"] { max-width: none; padding: 0; gap: 0; }
+[data-testid="stMarkdownContainer"] p, [data-testid="stMarkdownContainer"] li,
+.stApp label, .stApp label p { color: var(--ink); }
+[data-testid="stCaptionContainer"], [data-testid="stCaptionContainer"] p {
+  color: var(--muted);
+}
+.rotulo {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+.rotulo--acento { color: var(--accent); letter-spacing: 0; text-transform: none; }
+.linha-rotulo { display: flex; justify-content: space-between; align-items: baseline; }
+
+/* header */
+.st-key-cabecalho {
+  padding: 16px clamp(16px, 3vw, 32px); border-bottom: 1px solid var(--line);
+}
+.marca { display: flex; align-items: center; gap: 12px; }
+.marca__quadro { width: 12px; height: 12px; background: var(--accent); }
+.marca__nome { font-weight: 600; letter-spacing: .02em; color: var(--ink); }
+.marca__sub {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted);
+}
+.indicador {
+  display: flex; align-items: center; justify-content: flex-end; gap: 8px;
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  text-transform: uppercase; letter-spacing: .08em; color: var(--muted);
+}
+.indicador::before {
+  content: ""; width: 8px; height: 8px; border-radius: 50%;
+  background: var(--muted);
+}
+.indicador[data-estado="ativo"]::before { background: var(--accent); }
+.indicador[data-estado="final"]::before { background: var(--ink); }
+
+/* layout */
+.st-key-principal {
+  max-width: 1440px; margin: 0 auto; width: 100%;
+  padding: 24px clamp(16px, 3vw, 32px); gap: 24px;
+}
+[class*="st-key-painel_"] {
+  background: var(--panel); border: 1px solid var(--line);
+  padding: 24px; gap: 20px;
+}
+.st-key-painel_resultados { border-color: var(--accent); }
+.st-key-painel_ao_vivo { display: flex; flex-direction: column; }
+[class*="st-key-painel_"] h3 {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; font-weight: 400;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+  padding: 0;
+}
+.st-key-painel_resultados h3 { color: var(--accent); }
+
+/* buttons */
+.stApp button {
+  font-family: 'JetBrains Mono', monospace; border-radius: 0;
+  background: transparent; color: var(--ink); border: 1px solid var(--line);
+}
+.stApp button * {
+  color: inherit; font-family: inherit; font-weight: inherit;
+  font-size: inherit; letter-spacing: inherit; text-transform: inherit;
+}
+.stApp button:hover { border-color: var(--ink); color: var(--ink); }
+.stApp button:disabled { opacity: .55; cursor: not-allowed; color: var(--ink); }
+.stApp button[data-testid="stBaseButton-primary"]:disabled {
+  color: var(--accentInk);
+}
+[data-testid="stNumberInput"] input:disabled {
+  color: var(--ink); -webkit-text-fill-color: var(--ink); opacity: 1;
+}
+.stApp button[data-testid="stBaseButton-primary"] {
+  background: var(--accent); color: var(--accentInk); border: none;
+  font-weight: 700;
+}
+.stApp button[data-testid="stBaseButton-primary"]:hover {
+  filter: brightness(1.08); color: var(--accentInk);
+}
+.st-key-botao_tema { width: 100%; display: flex; justify-content: flex-end; }
+.st-key-botao_tema button {
+  width: auto; font-size: 12px; min-height: 36px; padding: 0 12px;
+}
+.st-key-botao_tema button p::before { content: "◐  "; }
+.st-key-iniciar_sessao, .st-key-nova_sessao, .st-key-parar_antecipadamente,
+.st-key-confirmar_encerramento, .st-key-voltar { width: 100%; }
+.st-key-iniciar_sessao button, .st-key-nova_sessao button,
+.st-key-parar_antecipadamente button {
+  width: 100%; min-height: 56px; font-size: 15px; font-weight: 700;
+  letter-spacing: .08em; text-transform: uppercase;
+}
+.st-key-iniciar_sessao button:disabled { opacity: .4; }
+.st-key-confirmar_encerramento button, .st-key-voltar button {
+  width: 100%; min-height: 44px;
+}
+.st-key-parar_antecipadamente button, .st-key-confirmar_encerramento button {
+  color: var(--danger); border: 1px solid var(--danger); background: transparent;
+}
+
+/* camera cards */
+[class*="st-key-cartao_camera_"] {
+  position: relative; background: var(--panel2); border: 2px solid var(--line);
+  gap: 0;
+}
+[class*="st-key-cartao_camera_"]:hover { border-color: var(--muted); }
+[class*="st-key-cartao_camera_"]:has([data-testid="stBaseButton-primary"]) {
+  border-color: var(--accent);
+}
+[class*="st-key-cartao_camera_"]:has(button:disabled) { opacity: .55; }
+[class*="st-key-cartao_camera_"] img {
+  display: block; width: 100%; aspect-ratio: 16 / 9; object-fit: cover;
+  border-radius: 0;
+}
+[class*="st-key-cartao_camera_"] [data-testid="stCaptionContainer"] {
+  display: flex; align-items: center; justify-content: center;
+  aspect-ratio: 16 / 9;
+  background: repeating-linear-gradient(
+    135deg, var(--stripe) 0 8px, transparent 8px 16px);
+}
+[class*="st-key-cartao_camera_"] [data-testid="stCaptionContainer"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+}
+[class*="st-key-cartao_camera_"] [data-testid="stMarkdownContainer"] {
+  padding: 10px 12px 14px;
+}
+[class*="st-key-cartao_camera_"] [data-testid="stMarkdownContainer"] p {
+  margin: 0; line-height: 1.3;
+}
+[class*="st-key-cartao_camera_"] code {
+  display: block; font-family: 'JetBrains Mono', monospace; font-size: 13px;
+  font-weight: 700; background: transparent; color: var(--ink); padding: 0;
+}
+[class*="st-key-cartao_camera_"] strong {
+  display: block; font-size: 13px; font-weight: 400; color: var(--muted);
+}
+[class*="st-key-camera_"] {
+  position: absolute; inset: 0; width: 100% !important; height: 100%;
+  z-index: 2;
+}
+[class*="st-key-camera_"] button {
+  width: 100%; height: 100%; opacity: 0; border: none; cursor: pointer;
+}
+[class*="st-key-camera_"]:has(button[data-testid="stBaseButton-primary"]) {
+  inset: 6px 6px auto auto; width: auto !important; height: auto;
+}
+[class*="st-key-camera_"] button[data-testid="stBaseButton-primary"] {
+  width: auto !important; height: auto !important; min-height: 0 !important;
+  opacity: 1; padding: 2px 6px !important; font-size: 10px;
+  line-height: 1.4; pointer-events: none;
+}
+[class*="st-key-camera_"] button[data-testid="stBaseButton-primary"] * {
+  margin: 0; padding: 0; line-height: 1.4; font-size: 10px;
+}
+
+/* duration */
+[data-testid="stNumberInput"] input {
+  font-family: 'JetBrains Mono', monospace; font-size: 20px; font-weight: 700;
+  color: var(--ink);
+}
+[data-baseweb="input"], [data-baseweb="base-input"],
+[data-testid="stNumberInputContainer"] {
+  background: var(--panel2); border-radius: 0; border-color: var(--line);
+}
+[data-testid="stNumberInputContainer"] { border: 1px solid var(--line); }
+[class*="st-key-atalho_"] { width: 100%; }
+[class*="st-key-atalho_"] button {
+  width: 100%; min-height: 44px; font-size: 13px; font-weight: 400;
+}
+[data-testid="stNumberInput"] input, [data-testid="stNumberInputContainer"] {
+  min-height: 44px;
+}
+[class*="st-key-atalho_"] button[data-testid="stBaseButton-primary"],
+[class*="st-key-atalho_"] button[data-testid="stBaseButton-primary"]:disabled {
+  background: var(--accentSoft); color: var(--accent);
+  border: 1px solid var(--accent); font-weight: 400;
+}
+
+/* live panel: the order below puts the total first, like the prototype */
+.st-key-painel_ao_vivo > :has(.st-key-total),
+.st-key-painel_ao_vivo > :has(.st-key-captura_destaque) { order: 2; }
+.st-key-painel_ao_vivo > :has(.st-key-categorias) { order: 3; }
+.st-key-painel_ao_vivo > :has(.st-key-tempos) { order: 4; }
+.st-key-painel_ao_vivo > :has(.st-key-progresso) { order: 5; }
+[data-testid="stMetricValue"] p {
+  font-family: 'JetBrains Mono', monospace; font-weight: 700;
+  font-variant-numeric: tabular-nums; line-height: 1;
+}
+[data-testid="stMetricLabel"] p { color: var(--muted); }
+.st-key-total {
+  background: var(--accentSoft); border: 1px solid var(--line); padding: 20px;
+}
+.st-key-total [data-testid="stMetricLabel"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  letter-spacing: .1em; text-transform: uppercase;
+}
+.st-key-total [data-testid="stMetricValue"] p {
+  font-size: clamp(56px, 9vw, 104px); color: var(--accent);
+}
+.st-key-categorias [data-testid="stColumn"] {
+  position: relative; background: var(--panel2); border: 1px solid var(--line);
+  padding: 16px; gap: 10px;
+}
+.st-key-categorias [data-testid="stMetricLabel"] p { font-size: 14px; }
+.st-key-categorias [data-testid="stMetricValue"] p {
+  font-size: 44px; color: var(--ink);
+}
+[class*="st-key-participacao_"] {
+  position: absolute; top: 16px; right: 16px; width: auto;
+}
+[class*="st-key-participacao_"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 11px;
+  color: var(--muted); margin: 0;
+}
+[data-testid="stProgress"] [data-testid="stProgressBarTrack"] {
+  background: var(--panel2); border: 1px solid var(--line);
+  border-radius: 0; height: 10px;
+}
+[data-testid="stProgress"] [data-testid="stProgressBarTrack"] > div {
+  background: var(--accent); border-radius: 0;
+}
+.st-key-categorias [data-testid="stProgress"] [data-testid="stProgressBarTrack"] {
+  height: 4px; background: var(--line); border: none;
+}
+.st-key-tempos [data-testid="stColumn"] { gap: 4px; }
+[class*="st-key-rotulo_"] [data-testid="stMarkdownContainer"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; margin: 0;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+[class*="st-key-valor_"] [data-testid="stMarkdownContainer"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 32px; font-weight: 700;
+  line-height: 1.1; margin: 0; font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.st-key-valor_estimado [data-testid="stMarkdownContainer"] p {
+  color: var(--muted);
+}
+.st-key-progresso [data-testid="stMarkdownContainer"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted);
+}
+.st-key-taxa p {
+  text-align: right; font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  color: var(--accent); margin: 0;
+}
+
+/* capture: notice in the slot of the total */
+.st-key-captura_destaque {
+  background: var(--accentSoft); border: 1px solid var(--accent);
+  padding: 28px 20px; animation: pulso 2.4s ease-in-out infinite;
+}
+.st-key-captura_destaque [data-testid="stAlertContainer"] {
+  background: transparent !important; border: none !important;
+}
+.st-key-captura_destaque [data-testid="stAlert"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 15px;
+  letter-spacing: .04em;
+}
+@keyframes pulso { 50% { border-color: var(--line); } }
+
+/* right column: live panel and, below it, the result */
+[data-testid="stColumn"]:has(.st-key-painel_ao_vivo) { gap: 24px; }
+
+/* result panel */
+.st-key-planilha_cartao {
+  background: var(--panel2); border: 1px solid var(--line); padding: 16px;
+}
+.icone-arquivo {
+  display: flex; align-items: center; justify-content: center;
+  width: 40px; height: 40px; background: var(--accentSoft);
+  border: 1px solid var(--accent); color: var(--accent);
+  font-family: 'JetBrains Mono', monospace; font-size: 10px; font-weight: 700;
+}
+.st-key-planilha_cartao [data-testid="stDownloadButton"] button {
+  background: var(--accent); color: var(--accentInk); border: none;
+  font-weight: 700;
+}
+
+/* notices */
+[data-testid="stAlertContainer"] {
+  border-radius: 0; background: var(--accentSoft) !important;
+  border: 1px solid var(--accent) !important;
+}
+[data-testid="stAlert"] * { color: var(--ink); }
+"""
+# Regras que aplicam o visual do protótipo sobre os componentes nativos (D-12).
+#
+# Os seletores `st-key-…` vêm das chaves dos contêineres e botões, e os
+# `data-testid` são os do Streamlit. Não carrega fonte da internet: a interface
+# roda em 127.0.0.1 e tem de funcionar sem rede, então vale o fallback.
+#
+# Não pode conter palavras que os testes procuram no texto da página
+# (`textos(at)` concatena todo `markdown`, inclusive este bloco).
+
+INDICADOR_AGUARDANDO = "Aguardando"
+INDICADOR_CAPTURANDO = "Capturando"
+INDICADOR_PROCESSANDO = "Processando"
+INDICADOR_EM_ANDAMENTO = "Em andamento"
+INDICADOR_FINALIZADO = "Finalizado"
+
+ESTADO_DO_INDICADOR = {
+    INDICADOR_AGUARDANDO: "parado",
+    INDICADOR_CAPTURANDO: "ativo",
+    INDICADOR_PROCESSANDO: "ativo",
+    INDICADOR_EM_ANDAMENTO: "ativo",
+    INDICADOR_FINALIZADO: "final",
+}
+# Só para o CSS: a cor da bolinha do indicador.
 
 AVISO_SEM_CONTAGEM_NA_CAPTURA = (
     "A contagem de veículos começa quando a captura terminar."
 )
-"""AC-016.5: na captura não há quantidade, nem zero (SUP-055)."""
+# AC-016.5: na captura não há quantidade, nem zero (SUP-055).
+
+MENSAGEM_DO_TERMINAL = (
+    "Sessão iniciada pelo terminal: a interface não acompanha o progresso dela."
+)
+MENSAGEM_SEM_CONTAGEM = "Sem contagem a exibir para esta sessão."
+# AC-018.3 e AC-018.4: sessão cancelada, sem planilha, que falhou ou de processo
+# morto não mostra quantidade nenhuma, nem zero.
 
 AVISO_DE_ENCERRAR = {
     Fase.CAPTURA: (
@@ -73,6 +455,90 @@ AVISO_DE_ENCERRAR = {
         "vídeos serão mantidos para reprocessar depois."
     ),
 }
+
+
+@dataclass(frozen=True)
+class EstadoDaTela:
+    """O que está na tela nesta aba, a partir do disco e do que a aba dispensou."""
+
+    indicador: str
+    resultado_na_tela: bool
+    configuracao_travada: bool
+    sessao_em_andamento: bool
+
+
+def estado_da_tela(progresso: Progresso, dispensado: str | None) -> EstadoDaTela:
+    """A regra de apresentação de D-9: indicador, resultado e trava.
+
+    Resultado na tela é a sessão terminada cuja chave esta aba ainda não
+    dispensou com "Nova sessão". Só apresentação: nada é contado nem gravado.
+    """
+    em_andamento = progresso.situacao in (
+        Situacao.EM_ANDAMENTO,
+        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
+    )
+    resultado_na_tela = (
+        progresso.situacao is Situacao.TERMINADA
+        and progresso.resultado.chave != dispensado
+    )
+    if progresso.situacao is Situacao.EM_ANDAMENTO:
+        capturando = progresso.andamento.fase is Fase.CAPTURA
+        indicador = INDICADOR_CAPTURANDO if capturando else INDICADOR_PROCESSANDO
+    elif progresso.situacao is Situacao.EM_ANDAMENTO_PELO_TERMINAL:
+        indicador = INDICADOR_EM_ANDAMENTO
+    elif resultado_na_tela:
+        indicador = INDICADOR_FINALIZADO
+    else:
+        indicador = INDICADOR_AGUARDANDO
+    return EstadoDaTela(
+        indicador=indicador,
+        resultado_na_tela=resultado_na_tela,
+        configuracao_travada=em_andamento or resultado_na_tela,
+        sessao_em_andamento=em_andamento,
+    )
+
+
+def _tela(data_dir: Path) -> tuple[Progresso, EstadoDaTela]:
+    progresso = ler_progresso(data_dir)
+    return progresso, estado_da_tela(
+        progresso, st.session_state.get(CHAVE_RESULTADO_DISPENSADO)
+    )
+
+
+def _css_do_tema(tema: str) -> str:
+    variaveis = (
+        VARIAVEIS_DO_TEMA_CLARO if tema == TEMA_CLARO else VARIAVEIS_DO_TEMA_ESCURO
+    )
+    declaracoes = " ".join(f"{nome}: {valor};" for nome, valor in variaveis.items())
+    return f":root {{ {declaracoes} }}\n{CSS_DOS_COMPONENTES}"
+
+
+def _alternar_tema() -> None:
+    atual = st.session_state.get(CHAVE_TEMA, TEMA_ESCURO)
+    st.session_state[CHAVE_TEMA] = TEMA_ESCURO if atual == TEMA_CLARO else TEMA_CLARO
+
+
+def _selecionar_camera(id_camera: str) -> None:
+    """Acionar um cartão: só aquela câmera passa a ser a selecionada (AC-020.3)."""
+    st.session_state[CHAVE_CAMERA] = id_camera
+
+
+def _definir_duracao(minutos: int) -> None:
+    """Atalho de duração: grava o valor no próprio campo (AC-021.1)."""
+    st.session_state[CHAVE_DURACAO] = minutos
+
+
+def _marcar_baixada(chave: str) -> None:
+    """Registra que o botão foi acionado nesta aba (SUP-073).
+
+    Não confirma que o navegador gravou o arquivo: o Streamlit não tem como saber.
+    """
+    st.session_state[CHAVE_PLANILHA_BAIXADA] = chave
+
+
+def _dispensar_resultado(chave: str) -> None:
+    """"Nova sessão": esta aba para de mostrar o resultado (AC-023.6, SUP-074)."""
+    st.session_state[CHAVE_RESULTADO_DISPENSADO] = chave
 
 
 def _diretorio_de_cameras() -> Path:
@@ -96,23 +562,86 @@ def _confirmar(data_dir: Path) -> None:
     launch.encerrar_sessao(data_dir)
 
 
-def _quantidades(quantidades: Quantidades) -> None:
-    """As cinco métricas, na ordem de D-8; o total já vem somado (SUP-054)."""
-    valores = (
-        ("Carro", quantidades.carro),
-        ("Ônibus", quantidades.onibus),
-        ("Caminhão", quantidades.caminhao),
-        ("Moto", quantidades.moto),
-        ("Total", quantidades.total),
+def _categorias(quantidades: Quantidades, participacoes: Participacoes) -> None:
+    """Quantidade, participação e barra de cada categoria, e depois o total.
+
+    Os números já vêm prontos de `ler_progresso` (SUP-038); a ordem das métricas
+    é a de D-8 de `acompanhamento-ao-vivo`. Na tela, o CSS põe o total acima das
+    categorias, grande e em verde, como no protótipo.
+    """
+    categorias = (
+        ("Carro", quantidades.carro, participacoes.carro),
+        ("Ônibus", quantidades.onibus, participacoes.onibus),
+        ("Caminhão", quantidades.caminhao, participacoes.caminhao),
+        ("Moto", quantidades.moto, participacoes.moto),
     )
-    for coluna, (rotulo, valor) in zip(st.columns(len(valores)), valores):
-        coluna.metric(rotulo, valor)
+    with st.container(key="categorias"):
+        for coluna, (rotulo, quantidade, participacao) in zip(
+            st.columns(len(categorias)), categorias
+        ):
+            with coluna:
+                st.metric(rotulo, quantidade)
+                with st.container(key=f"participacao_{rotulo}"):
+                    st.markdown(f"{participacao}%")
+                st.progress(participacao)
+    with st.container(key="total"):
+        st.metric("Total", quantidades.total)
 
 
-def _andamento(andamento: Andamento, data_dir: Path) -> None:
-    """A sessão em curso: fase, progresso e o botão de encerrar (AC-012.1/2)."""
+def _cabecalho_ao_vivo(titulo: str, taxa: str | None) -> None:
+    """O título do painel e, à direita, a taxa (AC-022.1, AC-022.3)."""
+    coluna_titulo, coluna_taxa = st.columns([3, 1], vertical_alignment="center")
+    coluna_titulo.subheader(titulo)
+    if taxa is not None:
+        with coluna_taxa:
+            with st.container(key="taxa"):
+                st.markdown(taxa)
+
+
+def _corpo_ao_vivo(
+    *,
+    percentual: int,
+    quantidades: Quantidades | None,
+    participacoes: Participacoes | None,
+    decorrido: str,
+    estimado: str,
+) -> None:
+    """Barra, categorias (ou o aviso da captura) e tempos, na ordem do protótipo.
+
+    Sem `participacoes`, é a captura: nenhuma quantidade, nem zero, e o aviso em
+    destaque no lugar do total (AC-016.5, AC-022.7, SUP-055).
+    """
+    with st.container(key="progresso"):
+        st.progress(percentual)
+        st.markdown(f"{percentual}% concluído")
+    if participacoes is None:
+        with st.container(key="captura_destaque"):
+            st.info(AVISO_SEM_CONTAGEM_NA_CAPTURA)
+    else:
+        _categorias(quantidades, participacoes)
+    # Rótulo pequeno acima e valor grande abaixo, como no protótipo: são dois
+    # elementos, e é o CSS que dá a cada um o seu estilo (AC-017.1, AC-022.5).
+    with st.container(key="tempos"):
+        coluna_decorrido, coluna_estimado = st.columns(2)
+        with coluna_decorrido:
+            with st.container(key="rotulo_decorrido"):
+                st.markdown("Tempo decorrido")
+            with st.container(key="valor_decorrido"):
+                st.markdown(decorrido)
+        with coluna_estimado:
+            with st.container(key="rotulo_estimado"):
+                st.markdown("Tempo estimado")
+            with st.container(key="valor_estimado"):
+                st.markdown(estimado)
+
+
+def _andamento(andamento: Andamento) -> None:
+    """A sessão em curso (D-16): título, fase, progresso, categorias e tempos."""
+    _cabecalho_ao_vivo(
+        f"Contagem ao vivo · {andamento.nome_camera or andamento.id_camera}",
+        andamento.taxa,
+    )
     if andamento.fase is Fase.CAPTURA:
-        resolvidos = andamento.capturados + len(andamento.perdidos)
         st.markdown(
             f"**Capturando** — {andamento.capturados} de {andamento.pedidos} "
             f"minutos capturados, {len(andamento.perdidos)} perdidos"
@@ -121,30 +650,103 @@ def _andamento(andamento: Andamento, data_dir: Path) -> None:
             st.caption(
                 "Minutos perdidos: " + ", ".join(str(m) for m in andamento.perdidos)
             )
-        total = andamento.pedidos
     else:
-        resolvidos = andamento.processados
         st.markdown(
             f"**Processando** — {andamento.processados} de {andamento.a_processar} "
             f"minutos analisados"
         )
-        total = andamento.a_processar
-    st.progress(min(1.0, resolvidos / total) if total else 0.0)
+    _corpo_ao_vivo(
+        percentual=andamento.percentual,
+        quantidades=andamento.quantidades,
+        participacoes=andamento.participacoes,
+        decorrido=formatar_tempo(andamento.tempo_decorrido),
+        estimado=(
+            "—"
+            if andamento.tempo_estimado is None
+            else formatar_tempo(andamento.tempo_estimado)
+        ),
+    )
 
-    if andamento.quantidades is None:
-        st.info(AVISO_SEM_CONTAGEM_NA_CAPTURA)
-    else:
-        _quantidades(andamento.quantidades)
-    st.markdown(f"Tempo decorrido: {formatar_tempo(andamento.tempo_decorrido)}")
 
+def _ao_vivo_final(resultado: Resultado) -> None:
+    """Os valores finais da sessão concluída, no painel ao vivo (AC-018.1)."""
+    _cabecalho_ao_vivo(
+        f"Contagem ao vivo · {resultado.nome_camera or resultado.id_camera}",
+        resultado.taxa,
+    )
+    _corpo_ao_vivo(
+        percentual=100,
+        quantidades=resultado.quantidades,
+        participacoes=resultado.participacoes,
+        decorrido=(
+            "—"
+            if resultado.tempo_total is None
+            else formatar_tempo(resultado.tempo_total)
+        ),
+        estimado=formatar_tempo(0),
+    )
+
+
+def _ao_vivo_ocioso() -> None:
+    """Sem sessão e sem resultado na tela: zeros e 00:00, como no protótipo.
+
+    Não é captura, então AC-016.5 e SUP-055 não se aplicam.
+    """
+    _cabecalho_ao_vivo("Contagem ao vivo", TAXA_SEM_DADO)
+    _corpo_ao_vivo(
+        percentual=0,
+        quantidades=Quantidades(carro=0, onibus=0, caminhao=0, moto=0),
+        participacoes=Participacoes(carro=0, onibus=0, caminhao=0, moto=0),
+        decorrido=formatar_tempo(0),
+        estimado=formatar_tempo(0),
+    )
+
+
+def _ao_vivo_sem_numeros(titulo: str, mensagem: str) -> None:
+    """Sessão do terminal ou desfecho sem contagem: nenhum número (AC-018.3/4)."""
+    _cabecalho_ao_vivo(titulo, None)
+    st.caption(mensagem)
+
+
+def _painel_ao_vivo(progresso: Progresso, tela: EstadoDaTela) -> None:
+    """O painel "Contagem ao vivo", sempre na tela, com o conteúdo de cada estado."""
+    with st.container(key="painel_ao_vivo"):
+        if progresso.situacao is Situacao.EM_ANDAMENTO:
+            _andamento(progresso.andamento)
+        elif progresso.situacao is Situacao.EM_ANDAMENTO_PELO_TERMINAL:
+            _ao_vivo_sem_numeros("Contagem ao vivo", MENSAGEM_DO_TERMINAL)
+        elif tela.resultado_na_tela:
+            resultado = progresso.resultado
+            if resultado.fase is Fase.CONCLUIDA and resultado.quantidades is not None:
+                _ao_vivo_final(resultado)
+            else:
+                titulo = "Contagem ao vivo"
+                if resultado.nome_camera:
+                    titulo += f" · {resultado.nome_camera}"
+                _ao_vivo_sem_numeros(titulo, MENSAGEM_SEM_CONTAGEM)
+        else:
+            _ao_vivo_ocioso()
+
+
+def _parar_antecipadamente(andamento: Andamento, data_dir: Path) -> None:
+    """O botão de encerrar, com confirmação, no lugar de "Iniciar sessão"."""
     if not andamento.pode_encerrar:
         return
     if not st.session_state.get(CHAVE_CONFIRMANDO, False):
-        st.button("Encerrar sessão", on_click=_pedir_confirmacao)
+        st.button(
+            "Parar antecipadamente",
+            key="parar_antecipadamente",
+            on_click=_pedir_confirmacao,
+        )
         return
     st.warning(AVISO_DE_ENCERRAR[andamento.fase])
-    st.button("Confirmar encerramento", on_click=_confirmar, args=(data_dir,))
-    st.button("Voltar", on_click=_voltar)
+    st.button(
+        "Confirmar encerramento",
+        key="confirmar_encerramento",
+        on_click=_confirmar,
+        args=(data_dir,),
+    )
+    st.button("Voltar", key="voltar", on_click=_voltar)
 
 
 def _tempo_total(resultado: Resultado) -> None:
@@ -153,27 +755,58 @@ def _tempo_total(resultado: Resultado) -> None:
         st.markdown(f"Tempo total: {formatar_tempo(resultado.tempo_total)}")
 
 
-def _resultado(resultado: Resultado) -> None:
-    """O desfecho da última sessão (AC-012.3, AC-012.5 e AC-012.6)."""
-    if resultado.fase is Fase.CONCLUIDA:
-        st.success(f"Sessão concluída — status {resultado.status}.")
-        if resultado.aviso:
-            st.warning(resultado.aviso)
-        if resultado.quantidades is not None:
-            _quantidades(resultado.quantidades)
-        _tempo_total(resultado)
-        if resultado.planilha is not None:
-            try:
-                dados = resultado.planilha.read_bytes()
-            except OSError as falha:
-                st.error(f"Não foi possível ler a planilha: {falha}")
-                return
+def _desfecho_da_conclusao(resultado: Resultado) -> None:
+    """"Concluída · MM:SS" ou "Interrompida pelo usuário · MM:SS" (AC-023.2).
+
+    Substitui a linha "Tempo total" na sessão concluída, para o tempo não
+    aparecer duas vezes. Sem o tempo total (estado antigo), só o texto.
+    """
+    texto = (
+        "Interrompida pelo usuário"
+        if resultado.encerrada_pelo_usuario
+        else "Concluída"
+    )
+    if resultado.tempo_total is not None:
+        texto += f" · {formatar_tempo(resultado.tempo_total)}"
+    st.markdown(f"**{texto}**")
+
+
+def _cartao_da_planilha(resultado: Resultado) -> None:
+    """Nome do arquivo, número de registros e o botão de baixar (AC-023.2/3)."""
+    try:
+        dados = resultado.planilha.read_bytes()
+    except OSError as falha:
+        st.error(f"Não foi possível ler a planilha: {falha}")
+        return
+    registros = "—" if resultado.registros is None else resultado.registros
+    baixada = st.session_state.get(CHAVE_PLANILHA_BAIXADA) == resultado.chave
+    with st.container(key="planilha_cartao"):
+        icone, texto, botao = st.columns([1, 5, 3], vertical_alignment="center")
+        icone.markdown('<div class="icone-arquivo">XLSX</div>', unsafe_allow_html=True)
+        with texto:
+            st.markdown(f"**{resultado.planilha.name}**")
+            st.caption(f"{registros} registros · contagem por categoria e por minuto")
+        with botao:
             st.download_button(
-                "Baixar planilha (XLSX)",
+                "✓ Baixado" if baixada else "Baixar .xlsx",
                 data=dados,
                 file_name=resultado.planilha.name,
                 mime=MIME_DO_XLSX,
+                on_click=_marcar_baixada,
+                args=(resultado.chave,),
             )
+
+
+def _resultado(resultado: Resultado) -> None:
+    """O painel "Sessão finalizada" (AC-023.2 a AC-023.4)."""
+    st.subheader("Sessão finalizada")
+    if resultado.fase is Fase.CONCLUIDA:
+        _desfecho_da_conclusao(resultado)
+        st.markdown(f"status {resultado.status}")
+        if resultado.aviso:
+            st.warning(resultado.aviso)
+        if resultado.planilha is not None:
+            _cartao_da_planilha(resultado)
         elif resultado.mensagem:
             st.warning(resultado.mensagem)
     elif resultado.fase is Fase.SEM_PLANILHA:
@@ -189,67 +822,141 @@ def _resultado(resultado: Resultado) -> None:
         _tempo_total(resultado)
 
 
-def _area_da_sessao(data_dir: Path, estava_em_andamento: bool) -> None:
-    """Acompanha a sessão e mostra o resultado, relendo só do disco (AC-012.4).
+def _area_da_sessao(data_dir: Path, indicador_da_pagina: str) -> None:
+    """Painel ao vivo e, abaixo dele, o resultado, relendo só do disco (AC-012.4).
 
-    Roda como fragmento que se atualiza sozinho. Quando a sessão começa ou
-    termina, pede a página inteira de novo, para o formulário refletir o novo
-    estado.
+    Roda como fragmento que se atualiza sozinho. Quando o indicador do
+    cabeçalho muda (D-10), pede a página inteira de novo, para o cabeçalho, o
+    botão principal e os controles acompanharem a troca de fase e o fim da
+    sessão sem esperar ação do usuário.
     """
-    progresso = ler_progresso(data_dir)
-    em_andamento = progresso.situacao in (
-        Situacao.EM_ANDAMENTO,
-        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
-    )
-    if em_andamento != estava_em_andamento:
+    progresso, tela = _tela(data_dir)
+    if tela.indicador != indicador_da_pagina:
         st.rerun()
 
-    if progresso.situacao is Situacao.EM_ANDAMENTO:
-        _andamento(progresso.andamento, data_dir)
-    elif progresso.situacao is Situacao.TERMINADA:
+    _painel_ao_vivo(progresso, tela)
+    if tela.resultado_na_tela:
         st.session_state[CHAVE_CONFIRMANDO] = False
-        _resultado(progresso.resultado)
-    elif not em_andamento:
+        with st.container(key="painel_resultados"):
+            _resultado(progresso.resultado)
+    elif not tela.sessao_em_andamento:
         st.session_state[CHAVE_CONFIRMANDO] = False
 
 
-def _formulario(config_dir: Path, data_dir: Path) -> None:
-    progresso = ler_progresso(data_dir)
-    em_andamento = progresso.situacao in (
-        Situacao.EM_ANDAMENTO,
-        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
-    )
+def _cartao(camera, config_dir: Path, id_selecionada: str, travada: bool) -> None:
+    """Cartão da câmera: prévia ou "sem prévia", id, nome e o botão (D-13).
+
+    A prévia é a imagem fixa que o mantenedor indicou: a interface não acessa a
+    câmera para obtê-la (AC-020.2). Id e nome aparecem como texto; não há campo
+    para digitar id, URL ou endereço (AC-020.1, SUP-067).
+    """
+    selecionada = camera.id == id_selecionada
+    with st.container(key=f"cartao_camera_{camera.id}"):
+        previa = previa_da_camera(camera, config_dir)
+        if previa is None:
+            st.caption("sem prévia")
+        else:
+            st.image(previa, width="stretch")
+        st.markdown(f"`{camera.id}` **{camera.nome}**")
+        st.button(
+            "SELECIONADA" if selecionada else "Selecionar",
+            key=f"camera_{camera.id}",
+            type="primary" if selecionada else "secondary",
+            disabled=travada,
+            on_click=_selecionar_camera,
+            args=(camera.id,),
+        )
+
+
+def _configuracao(
+    config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
+) -> None:
+    """Painel de Configuração: câmera, duração e o botão principal (D-18)."""
     disponiveis = cameras_disponiveis(config_dir)
+    travada = tela.configuracao_travada
+    st.markdown('<span class="rotulo">Configuração</span>', unsafe_allow_html=True)
+    st.markdown('<span class="rotulo">Câmera</span>', unsafe_allow_html=True)
 
-    if em_andamento:
+    if tela.sessao_em_andamento:
         st.info(progresso.mensagem_de_recusa)
 
     id_escolhida = None
     if disponiveis.cameras:
-        nomes = {camera.id: camera.nome for camera in disponiveis.cameras}
-        # O usuário lê o nome do local; o id fica só do lado de dentro (AC-011.1).
-        id_escolhida = st.selectbox(
-            "Câmera", options=list(nomes), format_func=lambda id_: nomes[id_]
-        )
+        ids = [camera.id for camera in disponiveis.cameras]
+        # Sem escolha, ou com um id que sumiu do registro, vale a primeira (D-13).
+        if st.session_state.get(CHAVE_CAMERA) not in ids:
+            st.session_state[CHAVE_CAMERA] = ids[0]
+        id_escolhida = st.session_state[CHAVE_CAMERA]
+        # Cartões e duração travados continuam desenhados (D-11): o Streamlit
+        # descarta o estado de widget que não é desenhado, e é ele que devolve a
+        # duração anterior depois de "Nova sessão" (AC-023.6).
+        # Três cartões por linha, na ordem do registro (SUP-065).
+        cameras = disponiveis.cameras
+        for inicio in range(0, len(cameras), 3):
+            for coluna, camera in zip(st.columns(3), cameras[inicio : inicio + 3]):
+                with coluna:
+                    _cartao(camera, config_dir, id_escolhida, travada)
     else:
         st.warning("Nenhuma câmera disponível.")
         if disponiveis.motivo:
             st.caption(disponiveis.motivo)
 
-    minutos = st.number_input(
-        "Duração (minutos)",
-        min_value=DURACAO_MINIMA,
-        max_value=DURACAO_MAXIMA,
-        value=DURACAO_PADRAO,
-        step=1,
+    st.markdown(
+        '<div class="linha-rotulo"><span class="rotulo">Duração</span>'
+        f'<span class="rotulo rotulo--acento">máximo {DURACAO_MAXIMA} min</span></div>',
+        unsafe_allow_html=True,
     )
+    st.session_state.setdefault(CHAVE_DURACAO, DURACAO_PADRAO)
+    # Só o atalho igual à duração atual fica destacado; um valor digitado fora
+    # de 5, 10 e 15 não destaca nenhum (AC-021.1, AC-021.2). Travados, os
+    # atalhos continuam desenhados (D-11, AC-021.3).
+    campo, *colunas_dos_atalhos = st.columns([2, 1, 1, 1], vertical_alignment="bottom")
+    with campo:
+        st.number_input(
+            "Duração (minutos)",
+            min_value=DURACAO_MINIMA,
+            max_value=DURACAO_MAXIMA,
+            step=1,
+            key=CHAVE_DURACAO,
+            disabled=travada,
+            label_visibility="collapsed",
+        )
+    for coluna, atalho in zip(colunas_dos_atalhos, ATALHOS_DE_DURACAO):
+        coluna.button(
+            f"{atalho} min",
+            key=f"atalho_{atalho}",
+            type="primary" if st.session_state[CHAVE_DURACAO] == atalho else "secondary",
+            disabled=travada,
+            on_click=_definir_duracao,
+            args=(atalho,),
+        )
 
-    indisponivel = em_andamento or id_escolhida is None
-    if st.button("Iniciar sessão", disabled=indisponivel, type="primary"):
+    if tela.resultado_na_tela:
+        st.button(
+            "Nova sessão",
+            key="nova_sessao",
+            type="primary",
+            on_click=_dispensar_resultado,
+            args=(progresso.resultado.chave,),
+        )
+        return
+
+    if progresso.situacao is Situacao.EM_ANDAMENTO:
+        # Sessão da interface: o botão de iniciar não é desenhado (AC-023.1).
+        _parar_antecipadamente(progresso.andamento, data_dir)
+        return
+
+    indisponivel = tela.sessao_em_andamento or id_escolhida is None
+    if st.button(
+        "Iniciar sessão",
+        key="iniciar_sessao",
+        disabled=indisponivel,
+        type="primary",
+    ):
         try:
             disparada = launch.iniciar_sessao(
                 id_escolhida,
-                int(minutos),
+                int(st.session_state[CHAVE_DURACAO]),
                 data_dir=data_dir,
                 config_dir=config_dir,
             )
@@ -267,19 +974,52 @@ def _formulario(config_dir: Path, data_dir: Path) -> None:
             st.error(f"A sessão não iniciou: {problema}")
 
 
+def _cabecalho(tela: EstadoDaTela) -> None:
+    """Marca, estado do sistema e botão de tema (US-019)."""
+    with st.container(key="cabecalho"):
+        marca, indicador, botao = st.columns(
+            [6, 2, 1.4], vertical_alignment="center"
+        )
+        marca.markdown(
+            '<div class="marca"><span class="marca__quadro"></span>'
+            '<span class="marca__nome">FLUXO</span>'
+            '<span class="marca__sub">detecção e contagem de veículos</span></div>',
+            unsafe_allow_html=True,
+        )
+        indicador.markdown(
+            f'<span class="indicador" data-estado="{ESTADO_DO_INDICADOR[tela.indicador]}">'
+            f"{tela.indicador}</span>",
+            unsafe_allow_html=True,
+        )
+        escuro = st.session_state[CHAVE_TEMA] == TEMA_ESCURO
+        botao.button(
+            "Tema claro" if escuro else "Tema escuro",
+            key="botao_tema",
+            on_click=_alternar_tema,
+        )
+
+
 def main() -> None:
     load_dotenv()
-    st.set_page_config(page_title="Contagem de veículos", layout="centered")
-    st.title("Contagem de veículos")
+    st.set_page_config(page_title="Contagem de veículos", layout="wide")
+    st.session_state.setdefault(CHAVE_TEMA, TEMA_ESCURO)
+    st.markdown(
+        f"<style>{_css_do_tema(st.session_state[CHAVE_TEMA])}</style>",
+        unsafe_allow_html=True,
+    )
     data_dir = data_dir_do_ambiente()
-    em_andamento = ler_progresso(data_dir).situacao in (
-        Situacao.EM_ANDAMENTO,
-        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
-    )
-    st.fragment(run_every=ATUALIZACAO_EM_SEGUNDOS)(_area_da_sessao)(
-        data_dir, em_andamento
-    )
-    _formulario(_diretorio_de_cameras(), data_dir)
+    progresso, tela = _tela(data_dir)
+
+    _cabecalho(tela)
+    with st.container(key="principal"):
+        configuracao, ao_vivo = st.columns([1, 1])
+        with configuracao:
+            with st.container(key="painel_configuracao"):
+                _configuracao(_diretorio_de_cameras(), data_dir, progresso, tela)
+        with ao_vivo:
+            st.fragment(run_every=ATUALIZACAO_EM_SEGUNDOS)(_area_da_sessao)(
+                data_dir, tela.indicador
+            )
 
 
 main()

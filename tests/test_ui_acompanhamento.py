@@ -71,6 +71,16 @@ def textos(at) -> str:
     return "\n".join(partes)
 
 
+def tempo(at, rotulo: str) -> str:
+    """O valor de um cronômetro: o markdown logo depois do rótulo (AC-017.1).
+
+    Rótulo e valor são dois elementos, para o rótulo ficar pequeno acima do
+    número grande, como no protótipo.
+    """
+    valores = [m.value for m in at.markdown]
+    return valores[valores.index(rotulo) + 1]
+
+
 def downloads(at) -> list:
     return list(at.get("download_button"))
 
@@ -147,8 +157,8 @@ def test_AC_012_3_sessao_concluida_mostra_o_status_e_oferece_o_download(data_dir
     assert not at.exception
     assert "status COMPLETA" in textos(at)
     (download,) = downloads(at)
-    assert download.proto.label == "Baixar planilha (XLSX)"
-    assert botoes(at).count("Encerrar sessão") == 0
+    assert download.proto.label == "Baixar .xlsx"
+    assert botoes(at).count("Parar antecipadamente") == 0
 
 
 def test_AC_012_3_sessao_degradada_mostra_o_aviso_junto_do_download(data_dir):
@@ -199,9 +209,9 @@ def test_AC_012_4_encerrar_so_pede_a_parada_depois_da_confirmacao(data_dir):
 
     with trava_do_run(data_dir):
         at = abre_a_interface()
-        assert "Encerrar sessão" in botoes(at)
+        assert "Parar antecipadamente" in botoes(at)
 
-        at = clica(at, "Encerrar sessão")
+        at = clica(at, "Parar antecipadamente")
         # O primeiro clique só pergunta.
         assert not (data_dir / NOME_DO_PEDIDO).exists()
         assert "Os minutos já capturados serão processados" in textos(at)
@@ -209,9 +219,9 @@ def test_AC_012_4_encerrar_so_pede_a_parada_depois_da_confirmacao(data_dir):
 
         at = clica(at, "Voltar")
         assert not (data_dir / NOME_DO_PEDIDO).exists()
-        assert "Encerrar sessão" in botoes(at)
+        assert "Parar antecipadamente" in botoes(at)
 
-        at = clica(at, "Encerrar sessão")
+        at = clica(at, "Parar antecipadamente")
         at = clica(at, "Confirmar encerramento")
 
     assert (data_dir / NOME_DO_PEDIDO).is_file()
@@ -225,7 +235,7 @@ def test_AC_012_4_o_aviso_de_encerrar_no_processamento_fala_em_cancelar(data_dir
 
     with trava_do_run(data_dir):
         at = abre_a_interface()
-        at = clica(at, "Encerrar sessão")
+        at = clica(at, "Parar antecipadamente")
 
     assert "A contagem será cancelada" in textos(at)
     assert "vídeos serão mantidos" in textos(at)
@@ -273,7 +283,7 @@ def test_sessao_do_terminal_aparece_sem_botao_de_encerrar(data_dir):
         at = abre_a_interface()
 
     assert "Outro local" in textos(at)
-    assert "Encerrar sessão" not in botoes(at)
+    assert "Parar antecipadamente" not in botoes(at)
     assert at.get("progress") == []
 
 
@@ -396,13 +406,13 @@ def test_AC_017_1_captura_e_processamento_mostram_tempo_decorrido_mm_ss(
     with trava_do_run(data_dir):
         na_captura = abre_a_interface()
 
-    assert "Tempo decorrido: 01:15" in textos(na_captura)
+    assert tempo(na_captura, "Tempo decorrido") == "01:15"
 
     em_processamento(data_dir)
     with trava_do_run(data_dir):
         no_processamento = abre_a_interface()
 
-    assert "Tempo decorrido: 01:15" in textos(no_processamento)
+    assert tempo(no_processamento, "Tempo decorrido") == "01:15"
 
 
 def test_AC_017_3_tempo_exibido_avanca_com_o_relogio(data_dir, relogio):
@@ -410,11 +420,11 @@ def test_AC_017_3_tempo_exibido_avanca_com_o_relogio(data_dir, relogio):
 
     with trava_do_run(data_dir):
         at = abre_a_interface()
-        assert "Tempo decorrido: 00:00" in textos(at)
+        assert tempo(at, "Tempo decorrido") == "00:00"
         relogio.avancar(seconds=42)
         at = at.run()
 
-    assert "Tempo decorrido: 00:42" in textos(at)
+    assert tempo(at, "Tempo decorrido") == "00:42"
 
 
 def test_AC_017_4_reabrir_mostra_tempo_desde_o_inicio_da_sessao(data_dir, relogio):
@@ -424,7 +434,7 @@ def test_AC_017_4_reabrir_mostra_tempo_desde_o_inicio_da_sessao(data_dir, relogi
     with trava_do_run(data_dir):
         reaberta = abre_a_interface()
 
-    assert "Tempo decorrido: 07:03" in textos(reaberta)
+    assert tempo(reaberta, "Tempo decorrido") == "07:03"
 
 
 def test_AC_018_1_concluida_mostra_metricas_finais_e_tempo_total(data_dir, relogio):
@@ -452,9 +462,9 @@ def test_AC_018_1_concluida_mostra_metricas_finais_e_tempo_total(data_dir, relog
         ("Moto", "1"),
         ("Total", "3"),
     ]
-    assert "Tempo total: 17:05" in textos(at)
+    assert "Concluída · 17:05" in textos(at)
     (download,) = downloads(at)
-    assert download.proto.label == "Baixar planilha (XLSX)"
+    assert download.proto.label == "Baixar .xlsx"
 
 
 @pytest.mark.parametrize(

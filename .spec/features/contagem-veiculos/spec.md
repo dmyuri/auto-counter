@@ -48,6 +48,11 @@ Critérios de aceite:
   AC-005.3 — Dado um clipe de 59,93 s a 30 fps e a taxa de amostragem
   configurada, quando o clipe é processado, então o número de frames analisados
   corresponde à taxa declarada e os demais frames não passam por inferência.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, a taxa passa a ser de 10 frames analisados por segundo
+  > de vídeo, seja qual for o fps, em vez de 1 a cada 3 de um clipe de 59,93 s
+  > a 30 fps (AC-028.5 e SUP-090).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-005.4 — Dado a máquina de referência e a configuração padrão, quando uma
   sessão de 15 minutos já baixada é processada, então o tempo médio por frame
@@ -84,6 +89,11 @@ Critérios de aceite:
   AC-006.5 — Dado o Last-Modified do clipe e o índice do frame em que o
   cruzamento ocorreu, quando o evento é registrado, então seu timestamp é o
   início do clipe somado ao deslocamento do frame, com resolução de 1 segundo.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, que não tem Last-Modified, o evento passa a ser
+  > localizado pelo deslocamento desde o início do seu vídeo, sem hora do dia
+  > (AC-030.5 e SUP-100).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-006.6 — Dado um mesmo id de rastreio que dispara mais de um cruzamento no
   mesmo sentido dentro de um clipe, quando o sistema avalia os cruzamentos, então
@@ -124,11 +134,21 @@ Critérios de aceite:
   AC-007.3 — Dado a passagem de um clipe para o seguinte, quando o próximo clipe
   começa a ser processado, então o estado do rastreador é reiniciado e nenhum id
   de rastreio é reaproveitado entre clipes.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, o rastreador passa a ser reiniciado na troca de
+  > vídeo, e não na troca de minuto, que dentro de um vídeo é contínuo
+  > (AC-028.6 e AC-028.7).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
   AC-007.4 — Dado que o minuto entre dois clipes processados foi marcado como não
   capturado, quando o clipe posterior é processado, então a janela de
   deduplicação de emenda não é aplicada, porque os dois clipes não são
   adjacentes, e todos os cruzamentos são contados.
+  > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
+  > Na sessão de upload, dois vídeos consecutivos passam a ser sempre tratados
+  > como não adjacentes, sem deduplicação de emenda entre eles (AC-028.7 e
+  > SUP-092).
+  > Ver `.spec/features/processamento-upload/spec.md`.
 
 ## Fora de escopo
 

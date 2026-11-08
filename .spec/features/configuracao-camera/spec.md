@@ -36,11 +36,30 @@ Critérios de aceite:
   quando o sistema carrega o registro, então retorna exatamente N câmeras, cada
   uma com id, nome do local, rótulo do sentido A, rótulo do sentido B e linha
   de contagem.
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > Cada câmera passa a poder declarar o campo opcional `preview`, com o
+  > caminho da imagem exibida no cartão da interface (AC-020.2 e SUP-066).
+  > Ver `.spec/features/layout-interface/spec.md`.
+
+  > **Alterado por:** feature `upload-videos`, em 2026-11-07.
+  > Cada câmera passa a ter também a resolução de calibração, no campo
+  > `resolucao`, com a largura e a altura do frame em que a linha foi definida
+  > (SUP-086).
+  > Ver `.spec/features/upload-videos/spec.md`.
 
   AC-001.2 — Dado um arquivo de câmera sem um dos campos obrigatórios (id, nome,
   sentido_a, sentido_b, linha) ou com tipo inválido, quando o sistema carrega o
   registro, então esse arquivo é rejeitado com erro que nomeia o arquivo e o
   campo problemático, e as demais câmeras permanecem disponíveis.
+  > **Alterado por:** feature `layout-interface`, em 2026-11-07.
+  > O campo `preview` não entra entre os obrigatórios, e a falta dele ou um
+  > caminho que não abre não rejeita a câmera (SUP-066).
+  > Ver `.spec/features/layout-interface/spec.md`.
+
+  > **Alterado por:** feature `upload-videos`, em 2026-11-07.
+  > O campo `resolucao` passa a ser obrigatório, e o arquivo sem ele, ou com
+  > tipo inválido, é rejeitado pela mesma regra (SUP-086).
+  > Ver `.spec/features/upload-videos/spec.md`.
 
   AC-001.3 — Dado dois arquivos de câmera declarando o mesmo id, quando o
   sistema carrega o registro, então o carregamento falha com erro que cita o id
@@ -68,6 +87,11 @@ Critérios de aceite:
   AC-002.2 — Dado uma linha com pelo menos um ponto fora dos limites do frame da
   câmera, quando o sistema valida a configuração, então rejeita a câmera com
   erro que cita a coordenada inválida e as dimensões do frame.
+  > **Alterado por:** feature `upload-videos`, em 2026-11-07.
+  > A linha passa a ser validada também contra a resolução declarada em
+  > `resolucao`, que é a resolução que os vídeos enviados precisam ter
+  > (AC-027.5 e SUP-086).
+  > Ver `.spec/features/upload-videos/spec.md`.
 
   AC-002.3 — Dado uma linha cujos dois pontos são iguais (comprimento zero),
   quando o sistema valida a configuração, então rejeita a câmera com erro
