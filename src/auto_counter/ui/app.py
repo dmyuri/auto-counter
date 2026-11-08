@@ -25,7 +25,9 @@ cartões com id, nome e prévia: AC-020.1 a AC-020.6 (SUP-065 a SUP-067). A
 duração tem atalhos de 5, 10 e 15 minutos: AC-021.1 a AC-021.3. O painel ao vivo
 mostra título, participação, taxa, tempo estimado e percentual (AC-022.1 a
 AC-022.7), e a sessão é encerrada por "Parar antecipadamente", no painel de
-Configuração, com confirmação (AC-023.1, SUP-071). O tema é CSS injetado a cada
+Configuração, com confirmação (AC-023.1, SUP-071). O resultado é o painel
+"Sessão finalizada", com o cartão da planilha e a marca "✓ Baixado" (AC-023.2 a
+AC-023.4, SUP-073, SUP-075). O tema é CSS injetado a cada
 execução (SUP-062). A escolha de tema e a dispensa do resultado ficam em
 `st.session_state`: a interface não grava nada em disco (SUP-058, SUP-064,
 SUP-074).
@@ -77,6 +79,8 @@ CHAVE_TEMA = "tema"
 CHAVE_DURACAO = "duracao"
 ATALHOS_DE_DURACAO = (5, 10, 15)
 """Os atalhos só escolhem valores dentro de 1 a 15 minutos (AC-011.2, D-15)."""
+CHAVE_PLANILHA_BAIXADA = "planilha_baixada"
+"""A `chave` do resultado cuja planilha foi baixada nesta aba (D-9, SUP-073)."""
 CHAVE_CAMERA = "camera"
 """O id da câmera selecionada nesta aba; padrão, a primeira do registro (D-13)."""
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
@@ -245,6 +249,14 @@ def _definir_duracao(minutos: int) -> None:
     st.session_state[CHAVE_DURACAO] = minutos
 
 
+def _marcar_baixada(chave: str) -> None:
+    """Registra que o botão foi acionado nesta aba (SUP-073).
+
+    Não confirma que o navegador gravou o arquivo: o Streamlit não tem como saber.
+    """
+    st.session_state[CHAVE_PLANILHA_BAIXADA] = chave
+
+
 def _dispensar_resultado(chave: str) -> None:
     """"Nova sessão": esta aba para de mostrar o resultado (AC-023.6, SUP-074)."""
     st.session_state[CHAVE_RESULTADO_DISPENSADO] = chave
@@ -360,27 +372,56 @@ def _tempo_total(resultado: Resultado) -> None:
         st.markdown(f"Tempo total: {formatar_tempo(resultado.tempo_total)}")
 
 
+def _desfecho_da_conclusao(resultado: Resultado) -> None:
+    """"Concluída · MM:SS" ou "Interrompida pelo usuário · MM:SS" (AC-023.2).
+
+    Substitui a linha "Tempo total" na sessão concluída, para o tempo não
+    aparecer duas vezes. Sem o tempo total (estado antigo), só o texto.
+    """
+    texto = (
+        "Interrompida pelo usuário"
+        if resultado.encerrada_pelo_usuario
+        else "Concluída"
+    )
+    if resultado.tempo_total is not None:
+        texto += f" · {formatar_tempo(resultado.tempo_total)}"
+    st.markdown(f"**{texto}**")
+
+
+def _cartao_da_planilha(resultado: Resultado) -> None:
+    """Nome do arquivo, número de registros e o botão de baixar (AC-023.2/3)."""
+    try:
+        dados = resultado.planilha.read_bytes()
+    except OSError as falha:
+        st.error(f"Não foi possível ler a planilha: {falha}")
+        return
+    registros = "—" if resultado.registros is None else resultado.registros
+    baixada = st.session_state.get(CHAVE_PLANILHA_BAIXADA) == resultado.chave
+    with st.container(border=True):
+        st.markdown(f"**{resultado.planilha.name}**")
+        st.caption(f"{registros} registros · contagem por categoria e por minuto")
+        st.download_button(
+            "✓ Baixado" if baixada else "Baixar .xlsx",
+            data=dados,
+            file_name=resultado.planilha.name,
+            mime=MIME_DO_XLSX,
+            on_click=_marcar_baixada,
+            args=(resultado.chave,),
+        )
+
+
 def _resultado(resultado: Resultado) -> None:
-    """O desfecho da última sessão (AC-012.3, AC-012.5 e AC-012.6)."""
+    """O painel "Sessão finalizada" (AC-023.2 a AC-023.4)."""
+    st.subheader("Sessão finalizada")
     if resultado.fase is Fase.CONCLUIDA:
-        st.success(f"Sessão concluída — status {resultado.status}.")
+        _desfecho_da_conclusao(resultado)
+        st.markdown(f"status {resultado.status}")
         if resultado.aviso:
             st.warning(resultado.aviso)
         if resultado.quantidades is not None:
             _quantidades(resultado.quantidades)
-        _tempo_total(resultado)
         if resultado.planilha is not None:
-            try:
-                dados = resultado.planilha.read_bytes()
-            except OSError as falha:
-                st.error(f"Não foi possível ler a planilha: {falha}")
-                return
-            st.download_button(
-                "Baixar planilha (XLSX)",
-                data=dados,
-                file_name=resultado.planilha.name,
-                mime=MIME_DO_XLSX,
-            )
+            _cartao_da_planilha(resultado)
         elif resultado.mensagem:
             st.warning(resultado.mensagem)
     elif resultado.fase is Fase.SEM_PLANILHA:

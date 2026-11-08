@@ -147,7 +147,7 @@ def test_AC_012_3_sessao_concluida_mostra_o_status_e_oferece_o_download(data_dir
     assert not at.exception
     assert "status COMPLETA" in textos(at)
     (download,) = downloads(at)
-    assert download.proto.label == "Baixar planilha (XLSX)"
+    assert download.proto.label == "Baixar .xlsx"
     assert botoes(at).count("Parar antecipadamente") == 0
 
 
@@ -452,9 +452,9 @@ def test_AC_018_1_concluida_mostra_metricas_finais_e_tempo_total(data_dir, relog
         ("Moto", "1"),
         ("Total", "3"),
     ]
-    assert "Tempo total: 17:05" in textos(at)
+    assert "Concluída · 17:05" in textos(at)
     (download,) = downloads(at)
-    assert download.proto.label == "Baixar planilha (XLSX)"
+    assert download.proto.label == "Baixar .xlsx"
 
 
 @pytest.mark.parametrize(
