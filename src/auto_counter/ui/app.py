@@ -56,6 +56,13 @@ câmera e a área de envio, e "Iniciar sessão" não é desenhado. Na fonte ao v
 nada muda, e a lista de envio nunca entra na sessão (AC-026.4). Com sessão em
 andamento ou resultado na tela, a fonte e a área de envio ficam travadas
 (AC-026.5).
+
+E o envio: os arquivos que chegam são triados e gravados por `pipeline/envio.py`, lidos em
+segundo plano por `pipeline/leitura_video.py` e entram na lista na ordem recebida
+(AC-027.1, AC-027.2, AC-027.10). A lista, a validade de cada vídeo, a duplicata e os
+totais vêm de `pipeline/lista_envio.py` (AC-027.3 a AC-027.8) e ficam em
+`st.session_state`, então sobrevivem à troca de fonte (AC-026.3). "Remover" tira o
+item da lista sem apagar o arquivo (AC-027.8) e fica indisponível com a tela travada.
 """
 
 import argparse
@@ -63,11 +70,12 @@ import sys
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from auto_counter.pipeline import launch
+from auto_counter.pipeline import launch, leitura_video
 from auto_counter.pipeline.ambiente import data_dir_do_ambiente
 from auto_counter.pipeline.cameras import (
     DIRETORIO_PADRAO,
@@ -78,7 +86,15 @@ from auto_counter.pipeline.cameras import (
     previa_da_camera,
 )
 from auto_counter.pipeline.clipes import montar_zip
-from auto_counter.pipeline.lista_envio import aviso_da_camera
+from auto_counter.pipeline.envio import gravar_envio, triar
+from auto_counter.pipeline.lista_envio import (
+    AvaliacaoDoEnvio,
+    ItemDoEnvio,
+    LinhaDoEnvio,
+    Situacao as SituacaoDoEnvio,
+    aviso_da_camera,
+    avaliar_envio,
+)
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
     TAXA_SEM_DADO,
@@ -122,6 +138,9 @@ SUBTITULO_DA_FONTE = {
     FONTE_UPLOAD: "Processa arquivos enviados manualmente",
 }
 CHAVE_ENVIO_GERACAO = "envio_geracao"
+CHAVE_ENVIO_ITENS = "envio_itens"
+CHAVE_ENVIO_RECUSAS = "envio_recusas"
+LEITURA_EM_SEGUNDOS = 1
 # A opção "Manter clipes de vídeo" (AC-024.1, D-8 de `download-clipes`).
 CHAVE_CLIPES_BAIXADOS = "clipes_baixados"
 # Conjunto de `f"{chave}:{minuto}"` dos clipes cujo botão foi acionado (D-7).
@@ -1120,22 +1139,134 @@ def _camera_por_id(cameras, id_camera: str | None):
     return next((c for c in cameras if c.id == id_camera), None)
 
 
-def _area_de_envio(camera, travada: bool) -> None:
-    """Aviso da câmera e área de envio da fonte de upload (AC-026.2, D-12).
+def _literal(texto: str) -> str:
+    """O texto sem que o markdown o interprete (nomes de arquivo têm `_` e `*`)."""
+    for caractere in ("\\", "`", "*", "_", "[", "]", "<", ">", "~", "|"):
+        texto = texto.replace(caractere, "\\" + caractere)
+    return texto
 
-    O que chega no `file_uploader` é tratado na T-07; aqui só é desenhado,
-    sem `type=`, para a recusa por extensão ser a mensagem do app (D-3).
+
+def _receber_envio(arquivos, data_dir: Path) -> None:
+    """Tria, grava e põe na lista os arquivos do lote, na ordem recebida (D-3).
+
+    O recusado vai para as mensagens do lote e não é gravado. Depois do lote, a
+    geração do `file_uploader` sobe e a página roda de novo: o componente volta
+    vazio, o que libera a memória dele (R-2) e impede que um arquivo removido
+    volte no próximo `run` (D-10).
     """
+    itens = list(st.session_state[CHAVE_ENVIO_ITENS])
+    recusas = []
+    for arquivo in arquivos:
+        recusa = triar(arquivo.name, arquivo.size)
+        if recusa is not None:
+            recusas.append(recusa)
+            continue
+        caminho = gravar_envio(data_dir, arquivo.name, arquivo)
+        itens.append(
+            ItemDoEnvio(
+                id=uuid4().hex,
+                nome=arquivo.name,
+                tamanho=arquivo.size,
+                caminho=caminho,
+                leitura=leitura_video.iniciar_leitura(caminho),
+            )
+        )
+    st.session_state[CHAVE_ENVIO_ITENS] = itens
+    st.session_state[CHAVE_ENVIO_RECUSAS] = recusas
+    st.session_state[CHAVE_ENVIO_GERACAO] += 1
+    st.rerun()
+
+
+def _remover_envio(id_do_item: str) -> None:
+    """Tira o item da lista sem apagar o arquivo do disco (D-4)."""
+    st.session_state[CHAVE_ENVIO_ITENS] = [
+        item
+        for item in st.session_state[CHAVE_ENVIO_ITENS]
+        if item.id != id_do_item
+    ]
+
+
+def _linha_de_envio(linha: LinhaDoEnvio, travada: bool) -> None:
+    with st.container(key=f"linha_envio_{linha.id}"):
+        nome, duracao, tamanho, remover = st.columns(
+            [5, 1.2, 1.4, 1.4], vertical_alignment="center"
+        )
+        nome.markdown(f"**{_literal(linha.nome)}**")
+        duracao.caption(
+            "lendo…" if linha.situacao is SituacaoDoEnvio.LENDO else linha.duracao or "—"
+        )
+        tamanho.caption(linha.tamanho)
+        remover.button(
+            "Remover",
+            key=f"remover_{linha.id}",
+            disabled=travada,
+            on_click=_remover_envio,
+            args=(linha.id,),
+        )
+        if linha.motivo:
+            st.error(linha.motivo)
+        if linha.aviso:
+            st.warning(linha.aviso)
+
+
+def _avaliar_lista(camera, tela: EstadoDaTela) -> AvaliacaoDoEnvio:
+    return avaliar_envio(
+        st.session_state[CHAVE_ENVIO_ITENS],
+        camera,
+        outra_sessao_em_andamento=tela.sessao_em_andamento,
+    )
+
+
+def _corpo_da_lista(camera, tela: EstadoDaTela, lendo_ao_desenhar: bool) -> None:
+    """A lista e os totais. Dentro do fragmento, avisa a página quando termina."""
+    avaliacao = _avaliar_lista(camera, tela)
+    if lendo_ao_desenhar and not any(
+        linha.situacao is SituacaoDoEnvio.LENDO for linha in avaliacao.linhas
+    ):
+        st.rerun()  # o botão e os totais da página acompanham o fim da leitura
+    for linha in avaliacao.linhas:
+        _linha_de_envio(linha, tela.configuracao_travada)
+    if avaliacao.totais is not None:
+        st.caption(avaliacao.totais)
+        st.caption(avaliacao.duracao_total)
+
+
+def _area_de_envio(camera, data_dir: Path, tela: EstadoDaTela) -> AvaliacaoDoEnvio:
+    """Aviso da câmera, área de envio, recusas, lista e totais (AC-026.2, D-12).
+
+    O `file_uploader` não leva `type=`, para a recusa por extensão ser a mensagem
+    do app (D-3). A lista fica em `st.session_state`, fora do estado do widget,
+    para sobreviver à troca de fonte (AC-026.3, D-10). Triagem, validade,
+    duplicata e totais vêm do `pipeline` (SUP-038).
+    """
+    st.session_state.setdefault(CHAVE_ENVIO_ITENS, [])
+    st.session_state.setdefault(CHAVE_ENVIO_RECUSAS, [])
+    st.session_state.setdefault(CHAVE_ENVIO_GERACAO, 0)
     if camera is not None:
         st.info(aviso_da_camera(camera))
-    st.session_state.setdefault(CHAVE_ENVIO_GERACAO, 0)
-    st.file_uploader(
+    enviados = st.file_uploader(
         "Vídeos",
         accept_multiple_files=True,
         key=f"envio_{st.session_state[CHAVE_ENVIO_GERACAO]}",
-        disabled=travada,
+        disabled=tela.configuracao_travada,
         label_visibility="collapsed",
     )
+    if enviados and not tela.configuracao_travada:
+        _receber_envio(enviados, data_dir)
+    for recusa in st.session_state[CHAVE_ENVIO_RECUSAS]:
+        st.warning(recusa)
+
+    avaliacao = _avaliar_lista(camera, tela)
+    lendo = any(
+        linha.situacao is SituacaoDoEnvio.LENDO for linha in avaliacao.linhas
+    )
+    if lendo:
+        # Com leitura pendente, a lista é um fragmento que se atualiza sozinho
+        # (D-6): sem isso "Lendo vídeos…" nunca seria visível.
+        st.fragment(run_every=LEITURA_EM_SEGUNDOS)(_corpo_da_lista)(camera, tela, True)
+    else:
+        _corpo_da_lista(camera, tela, False)
+    return avaliacao
 
 
 def _configuracao(
@@ -1192,7 +1323,7 @@ def _configuracao(
             if chave in st.session_state:
                 st.session_state[chave] = st.session_state[chave]
         _area_de_envio(
-            _camera_por_id(disponiveis.cameras, id_escolhida), travada
+            _camera_por_id(disponiveis.cameras, id_escolhida), data_dir, tela
         )
 
     if tela.resultado_na_tela:
