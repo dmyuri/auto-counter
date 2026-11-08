@@ -1,11 +1,15 @@
-"""Nomes de download, tamanho em MB e `.zip` dos clipes — download-clipes.
+"""Nomes de download, tamanho em MB, duração e `.zip` dos clipes —
+download-clipes.
 
 Comportamento em `.spec/features/download-clipes/spec.md`: SUP-077 (nome do
-arquivo), D-3 (sufixo por minuto de relógio), D-5 (formato do tamanho em MB) e
-a parte de `pipeline` da D-6 (o `.zip` em memória, sem recomprimir).
+arquivo), D-2 (duração medida com OpenCV), D-3 (sufixo por minuto de
+relógio), D-5 (formato do tamanho em MB) e a parte de `pipeline` da D-6 (o
+`.zip` em memória, sem recomprimir).
 
 Funções puras: nada aqui importa `streamlit`, grava em disco ou abre o
-`manifest.json` — só lê os bytes dos clipes que recebe.
+`manifest.json` — `clipes_mantidos` recebe a tupla de `MinutoCapturado` já
+pronta (de `ResultadoDaSessao`) e só lê os bytes e os metadados dos próprios
+clipes.
 """
 
 from __future__ import annotations
@@ -16,7 +20,11 @@ from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 
+import cv2
+
+from auto_counter.capture.manifest import MinutoCapturado
 from auto_counter.export.format import FUSO
+from auto_counter.pipeline.state import ClipeMantido
 
 
 def nomes_de_download(id_camera: str, instantes: Sequence[datetime]) -> tuple[str, ...]:
@@ -60,3 +68,48 @@ def montar_zip(arquivos: Sequence[tuple[Path, str]]) -> bytes:
         for caminho, nome_no_zip in arquivos:
             zip_arquivo.writestr(nome_no_zip, Path(caminho).read_bytes())
     return buffer.getvalue()
+
+
+def duracao_em_segundos(caminho: Path) -> int | None:
+    """A duração do clipe, truncada para segundos inteiros (D-2).
+
+    Clipe que não abre, com FPS zero, ou qualquer falha do OpenCV dão `None`.
+    Nunca levanta: a medição é conveniência de exibição, não condição da
+    sessão.
+    """
+    captura = cv2.VideoCapture(str(caminho))
+    try:
+        if not captura.isOpened():
+            return None
+        fps = captura.get(cv2.CAP_PROP_FPS)
+        quadros = captura.get(cv2.CAP_PROP_FRAME_COUNT)
+        if not fps:
+            return None
+        return int(quadros / fps)
+    except Exception:
+        return None
+    finally:
+        captura.release()
+
+
+def clipes_mantidos(
+    dir_sessao: Path,
+    minutos_capturados: Sequence[MinutoCapturado],
+    *,
+    medir=duracao_em_segundos,
+) -> tuple[ClipeMantido, ...]:
+    """Um `ClipeMantido` por minuto capturado, em ordem de minuto (D-1, D-2).
+
+    Minuto perdido não chega aqui, porque não está em `minutos_capturados`
+    (AC-025.2). Esta função não lê o manifest do disco: recebe a tupla pronta.
+    """
+    dir_sessao = Path(dir_sessao)
+    return tuple(
+        ClipeMantido(
+            minuto=item.minuto,
+            caminho=(dir_sessao / item.arquivo).resolve(),
+            last_modified=item.last_modified,
+            duracao_segundos=medir((dir_sessao / item.arquivo).resolve()),
+        )
+        for item in sorted(minutos_capturados, key=lambda item: item.minuto)
+    )
