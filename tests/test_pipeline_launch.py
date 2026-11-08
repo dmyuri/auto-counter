@@ -134,13 +134,56 @@ def test_AC_011_2_duracao_fora_do_intervalo_nada_e_disparado(tmp_path, minutos):
     assert not (tmp_path / "logs").exists()
 
 
-def test_a_interface_nunca_pede_para_manter_os_videos(tmp_path):
+def test_AC_024_3_sem_a_opcao_o_comando_nao_pede_para_manter_os_videos(tmp_path):
     popen = PopenDuble()
 
     dispara(tmp_path, popen)
 
     comando, _ = popen.chamadas[0]
     assert "--keep-clips" not in comando
+
+
+def test_AC_024_2_com_a_opcao_o_comando_pede_para_manter_os_videos(tmp_path):
+    popen = PopenDuble()
+
+    iniciar_sessao(
+        "000013",
+        3,
+        data_dir=tmp_path,
+        config_dir=tmp_path / "cameras",
+        manter_videos=True,
+        popen=popen,
+    )
+
+    comando, _ = popen.chamadas[0]
+    assert comando[:4] == [sys.executable, "-m", "auto_counter", "session"]
+    assert comando[4:6] == ["run", "000013"]
+    assert "--minutes" in comando and "3" in comando
+    assert "--config-dir" in comando
+    assert "--keep-clips" in comando
+
+
+def test_AC_024_2_a_opcao_vale_no_processo_destacado(tmp_path):
+    popen = PopenDuble()
+
+    disparada = iniciar_sessao(
+        "000013",
+        3,
+        data_dir=tmp_path,
+        config_dir=tmp_path / "cameras",
+        manter_videos=True,
+        popen=popen,
+    )
+
+    comando, opcoes = popen.chamadas[0]
+    assert "--keep-clips" in comando
+    if sys.platform == "win32":
+        assert opcoes["creationflags"] & subprocess.DETACHED_PROCESS
+        assert opcoes["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert opcoes["start_new_session"] is True
+    assert opcoes["stdin"] == subprocess.DEVNULL
+    assert opcoes["stdout"].name == str(disparada.log)
 
 
 def test_pedido_de_parada_antigo_e_descartado_ao_disparar(tmp_path):
