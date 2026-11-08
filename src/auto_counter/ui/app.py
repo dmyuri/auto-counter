@@ -17,6 +17,14 @@ sessão: AC-016.1 e AC-016.5 (quantidades no processamento, aviso na captura),
 AC-017.1 (tempo decorrido) e AC-018.1 a AC-018.4 (quantidades finais e tempo
 total no resultado). A tela só exibe o que `ler_progresso` devolve (SUP-058).
 
+E, por `layout-interface`, a tela tem três painéis (Configuração, ao vivo e
+resultados) e um cabeçalho com o estado do sistema e o botão de tema: AC-019.1 a
+AC-019.6 (indicador e tema) e AC-023.5 a AC-023.7 (depois do resultado, só "Nova
+sessão" libera a configuração, e só nesta aba). O tema é CSS injetado a cada
+execução (SUP-062). A escolha de tema e a dispensa do resultado ficam em
+`st.session_state`: a interface não grava nada em disco (SUP-058, SUP-064,
+SUP-074).
+
 Esta é só a casca (SUP-038): nenhuma regra de captura, contagem ou exportação
 mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 `auto_counter.pipeline`, e é o `pipeline` que lê o progresso e dispara a sessão.
@@ -24,6 +32,7 @@ mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 
 import argparse
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 import streamlit as st
@@ -41,6 +50,7 @@ from auto_counter.pipeline.cameras import (
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
     Andamento,
+    Progresso,
     Quantidades,
     Resultado,
     Situacao,
@@ -57,6 +67,84 @@ ATUALIZACAO_EM_SEGUNDOS = 2
 """De quanto em quanto tempo a área da sessão se relê do disco (D-17)."""
 
 CHAVE_CONFIRMANDO = "confirmando_encerramento"
+CHAVE_TEMA = "tema"
+CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
+"""A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074)."""
+
+TEMA_ESCURO = "escuro"
+TEMA_CLARO = "claro"
+
+VARIAVEIS_DO_TEMA_ESCURO = {
+    "--bg": "#0c0e0d",
+    "--panel": "#141715",
+    "--panel2": "#1a1e1b",
+    "--line": "#262b28",
+    "--ink": "#eef1ee",
+    "--muted": "#8d958f",
+    "--accent": "oklch(0.83 0.19 150)",
+    "--accentInk": "#05130a",
+    "--accentSoft": "oklch(0.83 0.19 150 / 0.12)",
+    "--danger": "oklch(0.7 0.18 25)",
+    "--stripe": "#1d211e",
+}
+VARIAVEIS_DO_TEMA_CLARO = {
+    "--bg": "#f3f4f2",
+    "--panel": "#ffffff",
+    "--panel2": "#f7f8f6",
+    "--line": "#dde1dc",
+    "--ink": "#111412",
+    "--muted": "#596159",
+    "--accent": "oklch(0.52 0.15 150)",
+    "--accentInk": "#ffffff",
+    "--accentSoft": "oklch(0.52 0.15 150 / 0.1)",
+    "--danger": "oklch(0.55 0.19 25)",
+    "--stripe": "#eceee9",
+}
+"""As cores dos dois temas, copiadas do protótipo (D-12, SUP-062)."""
+
+CSS_DOS_COMPONENTES = """
+.stApp, [data-testid="stHeader"] {
+  background: var(--bg); color: var(--ink);
+  font-family: 'IBM Plex Sans', system-ui, sans-serif;
+}
+.stApp p, .stApp label, .stApp li, .stApp h1, .stApp h2, .stApp h3 {
+  color: var(--ink);
+}
+[data-testid="stCaptionContainer"] { color: var(--muted); }
+[data-testid="stVerticalBlockBorderWrapper"] {
+  background: var(--panel); border-color: var(--line); border-radius: 12px;
+}
+[data-testid="stMetricValue"], [data-testid="stNumberInput"] input {
+  font-family: 'JetBrains Mono', monospace;
+}
+.stButton > button, .stDownloadButton > button {
+  background: var(--panel2); color: var(--ink); border: 1px solid var(--line);
+}
+.stButton > button[kind="primary"] {
+  background: var(--accent); color: var(--accentInk); border-color: var(--accent);
+}
+.stProgress > div > div { background-color: var(--stripe); }
+.stProgress > div > div > div { background-color: var(--accent); }
+input, [data-baseweb="select"] > div {
+  background: var(--panel2); color: var(--ink); border-color: var(--line);
+}
+.indicador {
+  display: inline-block; padding: 4px 12px; border-radius: 999px;
+  background: var(--accentSoft); color: var(--accent);
+  border: 1px solid var(--line);
+}
+"""
+"""Regras que aplicam o visual do protótipo sobre os componentes nativos (D-12).
+
+Não pode conter palavras que os testes procuram no texto da página
+(`textos(at)` concatena todo `markdown`).
+"""
+
+INDICADOR_AGUARDANDO = "Aguardando"
+INDICADOR_CAPTURANDO = "Capturando"
+INDICADOR_PROCESSANDO = "Processando"
+INDICADOR_EM_ANDAMENTO = "Em andamento"
+INDICADOR_FINALIZADO = "Finalizado"
 
 AVISO_SEM_CONTAGEM_NA_CAPTURA = (
     "A contagem de veículos começa quando a captura terminar."
@@ -73,6 +161,72 @@ AVISO_DE_ENCERRAR = {
         "vídeos serão mantidos para reprocessar depois."
     ),
 }
+
+
+@dataclass(frozen=True)
+class EstadoDaTela:
+    """O que está na tela nesta aba, a partir do disco e do que a aba dispensou."""
+
+    indicador: str
+    resultado_na_tela: bool
+    configuracao_travada: bool
+    sessao_em_andamento: bool
+
+
+def estado_da_tela(progresso: Progresso, dispensado: str | None) -> EstadoDaTela:
+    """A regra de apresentação de D-9: indicador, resultado e trava.
+
+    Resultado na tela é a sessão terminada cuja chave esta aba ainda não
+    dispensou com "Nova sessão". Só apresentação: nada é contado nem gravado.
+    """
+    em_andamento = progresso.situacao in (
+        Situacao.EM_ANDAMENTO,
+        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
+    )
+    resultado_na_tela = (
+        progresso.situacao is Situacao.TERMINADA
+        and progresso.resultado.chave != dispensado
+    )
+    if progresso.situacao is Situacao.EM_ANDAMENTO:
+        capturando = progresso.andamento.fase is Fase.CAPTURA
+        indicador = INDICADOR_CAPTURANDO if capturando else INDICADOR_PROCESSANDO
+    elif progresso.situacao is Situacao.EM_ANDAMENTO_PELO_TERMINAL:
+        indicador = INDICADOR_EM_ANDAMENTO
+    elif resultado_na_tela:
+        indicador = INDICADOR_FINALIZADO
+    else:
+        indicador = INDICADOR_AGUARDANDO
+    return EstadoDaTela(
+        indicador=indicador,
+        resultado_na_tela=resultado_na_tela,
+        configuracao_travada=em_andamento or resultado_na_tela,
+        sessao_em_andamento=em_andamento,
+    )
+
+
+def _tela(data_dir: Path) -> tuple[Progresso, EstadoDaTela]:
+    progresso = ler_progresso(data_dir)
+    return progresso, estado_da_tela(
+        progresso, st.session_state.get(CHAVE_RESULTADO_DISPENSADO)
+    )
+
+
+def _css_do_tema(tema: str) -> str:
+    variaveis = (
+        VARIAVEIS_DO_TEMA_CLARO if tema == TEMA_CLARO else VARIAVEIS_DO_TEMA_ESCURO
+    )
+    declaracoes = " ".join(f"{nome}: {valor};" for nome, valor in variaveis.items())
+    return f":root {{ {declaracoes} }}\n{CSS_DOS_COMPONENTES}"
+
+
+def _alternar_tema() -> None:
+    atual = st.session_state.get(CHAVE_TEMA, TEMA_ESCURO)
+    st.session_state[CHAVE_TEMA] = TEMA_ESCURO if atual == TEMA_CLARO else TEMA_CLARO
+
+
+def _dispensar_resultado(chave: str) -> None:
+    """"Nova sessão": esta aba para de mostrar o resultado (AC-023.6, SUP-074)."""
+    st.session_state[CHAVE_RESULTADO_DISPENSADO] = chave
 
 
 def _diretorio_de_cameras() -> Path:
@@ -189,62 +343,80 @@ def _resultado(resultado: Resultado) -> None:
         _tempo_total(resultado)
 
 
-def _area_da_sessao(data_dir: Path, estava_em_andamento: bool) -> None:
+def _area_da_sessao(data_dir: Path, indicador_da_pagina: str) -> None:
     """Acompanha a sessão e mostra o resultado, relendo só do disco (AC-012.4).
 
-    Roda como fragmento que se atualiza sozinho. Quando a sessão começa ou
-    termina, pede a página inteira de novo, para o formulário refletir o novo
-    estado.
+    Roda como fragmento que se atualiza sozinho. Quando o indicador do
+    cabeçalho muda (D-10), pede a página inteira de novo, para o cabeçalho, o
+    botão principal e os controles acompanharem a troca de fase e o fim da
+    sessão sem esperar ação do usuário.
     """
-    progresso = ler_progresso(data_dir)
-    em_andamento = progresso.situacao in (
-        Situacao.EM_ANDAMENTO,
-        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
-    )
-    if em_andamento != estava_em_andamento:
+    progresso, tela = _tela(data_dir)
+    if tela.indicador != indicador_da_pagina:
         st.rerun()
 
     if progresso.situacao is Situacao.EM_ANDAMENTO:
-        _andamento(progresso.andamento, data_dir)
-    elif progresso.situacao is Situacao.TERMINADA:
+        with st.container(border=True):
+            _andamento(progresso.andamento, data_dir)
+    elif tela.resultado_na_tela:
         st.session_state[CHAVE_CONFIRMANDO] = False
-        _resultado(progresso.resultado)
-    elif not em_andamento:
+        with st.container(border=True):
+            _resultado(progresso.resultado)
+    elif not tela.sessao_em_andamento:
         st.session_state[CHAVE_CONFIRMANDO] = False
 
 
-def _formulario(config_dir: Path, data_dir: Path) -> None:
-    progresso = ler_progresso(data_dir)
-    em_andamento = progresso.situacao in (
-        Situacao.EM_ANDAMENTO,
-        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
-    )
+def _configuracao(
+    config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
+) -> None:
+    """Painel de Configuração: câmera, duração e o botão principal (D-18)."""
     disponiveis = cameras_disponiveis(config_dir)
+    travada = tela.configuracao_travada
 
-    if em_andamento:
+    if tela.sessao_em_andamento:
         st.info(progresso.mensagem_de_recusa)
 
     id_escolhida = None
     if disponiveis.cameras:
         nomes = {camera.id: camera.nome for camera in disponiveis.cameras}
+        if st.session_state.get("camera") not in nomes:
+            st.session_state.pop("camera", None)
+        # Os controles travados continuam desenhados (D-11): o Streamlit descarta
+        # o estado de widget que não é desenhado, e é ele que devolve a câmera e
+        # a duração anteriores depois de "Nova sessão" (AC-023.6).
         # O usuário lê o nome do local; o id fica só do lado de dentro (AC-011.1).
         id_escolhida = st.selectbox(
-            "Câmera", options=list(nomes), format_func=lambda id_: nomes[id_]
+            "Câmera",
+            options=list(nomes),
+            format_func=lambda id_: nomes[id_],
+            key="camera",
+            disabled=travada,
         )
     else:
         st.warning("Nenhuma câmera disponível.")
         if disponiveis.motivo:
             st.caption(disponiveis.motivo)
 
+    st.session_state.setdefault("duracao", DURACAO_PADRAO)
     minutos = st.number_input(
         "Duração (minutos)",
         min_value=DURACAO_MINIMA,
         max_value=DURACAO_MAXIMA,
-        value=DURACAO_PADRAO,
         step=1,
+        key="duracao",
+        disabled=travada,
     )
 
-    indisponivel = em_andamento or id_escolhida is None
+    if tela.resultado_na_tela:
+        st.button(
+            "Nova sessão",
+            type="primary",
+            on_click=_dispensar_resultado,
+            args=(progresso.resultado.chave,),
+        )
+        return
+
+    indisponivel = tela.sessao_em_andamento or id_escolhida is None
     if st.button("Iniciar sessão", disabled=indisponivel, type="primary"):
         try:
             disparada = launch.iniciar_sessao(
@@ -267,19 +439,41 @@ def _formulario(config_dir: Path, data_dir: Path) -> None:
             st.error(f"A sessão não iniciou: {problema}")
 
 
+def _cabecalho(tela: EstadoDaTela) -> None:
+    """Título, estado do sistema e botão de tema (US-019)."""
+    titulo, indicador, botao = st.columns([5, 2, 2], vertical_alignment="center")
+    titulo.title("Contagem de veículos")
+    indicador.markdown(
+        f'<span class="indicador">{tela.indicador}</span>', unsafe_allow_html=True
+    )
+    escuro = st.session_state[CHAVE_TEMA] == TEMA_ESCURO
+    botao.button(
+        "Tema claro" if escuro else "Tema escuro",
+        key="botao_tema",
+        on_click=_alternar_tema,
+    )
+
+
 def main() -> None:
     load_dotenv()
-    st.set_page_config(page_title="Contagem de veículos", layout="centered")
-    st.title("Contagem de veículos")
+    st.set_page_config(page_title="Contagem de veículos", layout="wide")
+    st.session_state.setdefault(CHAVE_TEMA, TEMA_ESCURO)
+    st.markdown(
+        f"<style>{_css_do_tema(st.session_state[CHAVE_TEMA])}</style>",
+        unsafe_allow_html=True,
+    )
     data_dir = data_dir_do_ambiente()
-    em_andamento = ler_progresso(data_dir).situacao in (
-        Situacao.EM_ANDAMENTO,
-        Situacao.EM_ANDAMENTO_PELO_TERMINAL,
-    )
-    st.fragment(run_every=ATUALIZACAO_EM_SEGUNDOS)(_area_da_sessao)(
-        data_dir, em_andamento
-    )
-    _formulario(_diretorio_de_cameras(), data_dir)
+    progresso, tela = _tela(data_dir)
+
+    _cabecalho(tela)
+    configuracao, ao_vivo = st.columns([2, 3])
+    with configuracao:
+        with st.container(border=True):
+            _configuracao(_diretorio_de_cameras(), data_dir, progresso, tela)
+    with ao_vivo:
+        st.fragment(run_every=ATUALIZACAO_EM_SEGUNDOS)(_area_da_sessao)(
+            data_dir, tela.indicador
+        )
 
 
 main()
