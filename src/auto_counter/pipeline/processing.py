@@ -9,6 +9,10 @@ A sequência é a que `session process` já tinha, extraída sem mudar a ordem
 descarta os vídeos, e só se o manifest não pedir para mantê-los. Falha na
 persistência não apaga nada, porque a sessão ainda pode ser reprocessada.
 
+Por `layout-interface` (SUP-070), `processar` também repassa
+`ao_iniciar_minuto`, o gancho que marca o instante Tm de cada minuto; só
+`session run` o passa.
+
 Está dividida em duas etapas, `processar` e `persistir_e_descartar`, porque a
 CLI imprime o relatório da contagem entre as duas.
 """
@@ -77,6 +81,7 @@ def processar(
     ao_resolver_minuto: Callable[[int], None] | None = None,
     ao_aceitar_evento: Callable[[int, Evento], None] | None = None,
     ao_descartar_minuto: Callable[[int], None] | None = None,
+    ao_iniciar_minuto: Callable[[int], None] | None = None,
 ) -> ResultadoDaContagem:
     """Conta os veículos da sessão e grava o `eventos.json`.
 
@@ -85,7 +90,8 @@ def processar(
     `ProcessamentoCancelado`. Nada é persistido e nenhum vídeo é apagado.
 
     `ao_aceitar_evento` e `ao_descartar_minuto` são repassados a
-    `processar_sessao` (acompanhamento ao vivo). `session process` não os passa.
+    `processar_sessao` (acompanhamento ao vivo), assim como `ao_iniciar_minuto`
+    (Tm de SUP-070, `layout-interface`). `session process` não passa nenhum.
     """
     try:
         return processar_sessao(
@@ -98,6 +104,7 @@ def processar(
             ao_resolver_minuto=ao_resolver_minuto,
             ao_aceitar_evento=ao_aceitar_evento,
             ao_descartar_minuto=ao_descartar_minuto,
+            ao_iniciar_minuto=ao_iniciar_minuto,
         )
     except ProcessamentoCancelado:
         (Path(dir_sessao) / NOME_DO_ARQUIVO_DE_EVENTOS).unlink(missing_ok=True)
