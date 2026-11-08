@@ -652,3 +652,141 @@ def test_AC_016_8_clipe_que_falha_no_meio_publica_e_depois_descarta_o_minuto(
         ("resolvido", 2),
     ]
     assert [e.minuto for e in resultado.eventos] == [1]
+
+
+# --- layout-interface: gancho `ao_iniciar_minuto` (T-03) ---
+
+
+class RegistroComInicio(Registro):
+    """`Registro` com o gancho que marca o início de cada minuto (SUP-070)."""
+
+    def iniciar(self, minuto) -> None:
+        self.chamadas.append(("iniciado", minuto))
+
+    def processa(self, dir_sessao, detector):
+        return processa(
+            dir_sessao,
+            detector,
+            ao_iniciar_minuto=self.iniciar,
+            ao_aceitar_evento=self.aceitar,
+            ao_descartar_minuto=self.descartar,
+            ao_resolver_minuto=self.resolver,
+        )
+
+
+def test_AC_022_6_ao_iniciar_minuto_e_chamado_antes_do_clipe_de_cada_minuto(tmp_path):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+    registro = RegistroComInicio()
+
+    registro.processa(dir_sessao, detector)
+
+    assert [(c[0], c[1]) for c in registro.chamadas] == [
+        ("iniciado", 1),
+        ("aceito", 1),
+        ("resolvido", 1),
+        ("iniciado", 2),
+        ("aceito", 2),
+        ("resolvido", 2),
+    ]
+
+
+def test_AC_022_6_minuto_perdido_na_captura_nao_chama_ao_iniciar_minuto(tmp_path):
+    dir_sessao = monta_sessao(
+        tmp_path,
+        minutos_capturados=(1, 3),
+        minutos_perdidos=(2,),
+        status=StatusDaSessao.DEGRADADA,
+    )
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA)
+    )
+    iniciados: list[int] = []
+
+    processa(dir_sessao, detector, ao_iniciar_minuto=iniciados.append)
+
+    assert iniciados == [1, 3]
+
+
+def test_AC_022_6_clipe_que_falha_tambem_chama_ao_iniciar_minuto(
+    tmp_path, monkeypatch
+):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    real = sampling.frames_amostrados
+
+    def falha_no_minuto_2(caminho, amostragem):
+        if Path(caminho).name == nome_do_arquivo_do_minuto(2):
+            return AmostragemQueFalhaNoFim(caminho, amostragem)
+        return real(caminho, amostragem)
+
+    monkeypatch.setattr(
+        "auto_counter.counting.clip.frames_amostrados", falha_no_minuto_2
+    )
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+    registro = RegistroComInicio()
+
+    registro.processa(dir_sessao, detector)
+
+    # Os eventos publicados antes da falha não interessam aqui: a ordem que
+    # importa é inicia → descarta → resolve.
+    assert [
+        (c[0], c[1]) for c in registro.chamadas if c[0] != "aceito"
+    ] == [
+        ("iniciado", 1),
+        ("resolvido", 1),
+        ("iniciado", 2),
+        ("descartado", 2),
+        ("resolvido", 2),
+    ]
+
+
+def test_AC_022_6_parada_antes_do_minuto_nao_chama_ao_iniciar_minuto(tmp_path):
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1, 2))
+    detector = DetectorDuble(
+        roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+        + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+    )
+    parada = ParadaDuble()
+    iniciados: list[int] = []
+
+    def ao_resolver(minuto: int) -> None:
+        if minuto == 1:
+            parada.pedida = True
+
+    with pytest.raises(ProcessamentoCancelado):
+        processa(
+            dir_sessao,
+            detector,
+            parada=parada,
+            ao_iniciar_minuto=iniciados.append,
+            ao_resolver_minuto=ao_resolver,
+        )
+
+    assert iniciados == [1]
+
+
+def test_sem_ao_iniciar_minuto_o_resultado_e_identico(tmp_path):
+    def roda(raiz: Path, **extra):
+        dir_sessao = monta_sessao(raiz, minutos_capturados=(1, 2))
+        detector = DetectorDuble(
+            roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.CARRO)
+            + roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA, Categoria.ONIBUS)
+        )
+        resultado = processa(dir_sessao, detector, **extra)
+        return resultado, (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).read_bytes()
+
+    (tmp_path / "a").mkdir()
+    (tmp_path / "b").mkdir()
+    sem, bytes_sem = roda(tmp_path / "a")
+    com, bytes_com = roda(tmp_path / "b", ao_iniciar_minuto=lambda minuto: None)
+
+    assert com.eventos == sem.eventos
+    assert com.minutos_processados == sem.minutos_processados
+    assert bytes_com == bytes_sem

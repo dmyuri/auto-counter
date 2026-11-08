@@ -44,6 +44,10 @@ Para `acompanhamento-ao-vivo`, `ao_aceitar_evento` publica cada evento aceito
 `ao_descartar_minuto` avisa que os eventos já publicados de um clipe que falhou
 no meio da leitura foram jogados fora (D-4, AC-016.8), antes de
 `ao_resolver_minuto`.
+
+Para `layout-interface` (SUP-070), `ao_iniciar_minuto` marca o instante Tm em que
+cada minuto capturado começa a ser processado, depois da consulta à parada e
+antes do clipe. O tempo estimado da interface é calculado a partir dele.
 """
 
 from collections.abc import Callable
@@ -140,6 +144,7 @@ def processar_sessao(
     ao_resolver_minuto: Callable[[int], None] | None = None,
     ao_aceitar_evento: Callable[[int, Evento], None] | None = None,
     ao_descartar_minuto: Callable[[int], None] | None = None,
+    ao_iniciar_minuto: Callable[[int], None] | None = None,
 ) -> ResultadoDaContagem:
     """Processa todos os clipes de uma sessão e grava o `eventos.json` (D-1).
 
@@ -161,6 +166,11 @@ def processar_sessao(
     é chamado quando o clipe falha (D-4), antes de `ao_resolver_minuto`
     (AC-016.8). Minuto perdido na captura nunca chega ao clipe e não publica
     nada (AC-016.6).
+
+    `ao_iniciar_minuto(minuto)` é chamado para cada minuto capturado, depois da
+    consulta a `parada` e antes de `processar_clipe`: marca o instante Tm de
+    SUP-070 (`layout-interface`). Minuto perdido na captura não o chama, e parada
+    pedida antes do minuto levanta `ProcessamentoCancelado` sem chamá-lo.
     """
     dir_sessao = Path(dir_sessao)
     manifest = manifest_da_captura.ler(dir_sessao)
@@ -204,6 +214,8 @@ def processar_sessao(
                 f"o processamento da sessão {manifest.id_sessao} foi cancelado "
                 f"a pedido do usuário antes do minuto {minuto}"
             )
+        if ao_iniciar_minuto is not None:
+            ao_iniciar_minuto(minuto)
         if anterior is None:
             filtro = FiltroDaEmenda.sem_anterior()
         else:
