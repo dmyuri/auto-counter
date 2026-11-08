@@ -20,6 +20,13 @@ SUP-070), o estado também recebe o instante em que cada minuto começa a ser
 processado e os minutos concluídos com dado. As
 exceções inesperadas marcam o estado como `FALHOU` e sobem, para o comando
 traduzi-las em mensagem e código de saída.
+
+Por `download-clipes` (SUP-076, SUP-080), `manter_videos` chega aqui e vai
+para o `AnotadorDoEstado`. Só no desfecho `CONCLUIDA` com a opção ligada, a
+lista de clipes mantidos (`pipeline.clipes.clipes_mantidos`) é montada e
+gravada no estado; nos outros desfechos ela continua nula (AC-025.6,
+SUP-079). Uma falha ao montar a lista nunca derruba a sessão concluída: é
+só avisada em `stderr`.
 """
 
 import os
@@ -38,6 +45,7 @@ from auto_counter.counting.clip import DetectorDoClipe
 from auto_counter.counting.config import ConfiguracaoDoProcessamento
 from auto_counter.counting.session import ProcessamentoCancelado, SessaoSemClipes
 from auto_counter.export import exportar_sessao
+from auto_counter.pipeline.clipes import clipes_mantidos
 from auto_counter.pipeline.processing import (
     conferir_modelo,
     persistir_e_descartar,
@@ -92,6 +100,7 @@ def executar_sessao(
         duracao_pedida=duracao,
         iniciada_em=agora(),
         agora=agora,
+        manter_videos=manter_videos,
     )
     anotador.iniciar()
 
@@ -189,12 +198,27 @@ def executar_sessao(
             planilha = exportar_sessao(conexao, id_sessao, data_dir=data_dir)
             gravada = ler_sessao(conexao, id_sessao)
 
+        clipes = None
+        if manter_videos:
+            try:
+                clipes = clipes_mantidos(
+                    captura.dir_sessao, captura.minutos_capturados
+                )
+            except Exception as falha:  # noqa: BLE001
+                print(
+                    f"aviso: não foi possível montar a lista de clipes mantidos "
+                    f"da sessão {id_sessao}: {falha}; a interface vai mostrá-la "
+                    f"sem a lista",
+                    file=sys.stderr,
+                )
+
         anotador.terminar(
             Fase.CONCLUIDA,
             id_sessao=id_sessao,
             status=gravada.status.value,
             planilha=str(planilha),
             mensagem="sessão concluída",
+            clipes=clipes,
         )
         return anotador.estado
     except BaseException as falha:
