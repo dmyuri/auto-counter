@@ -21,7 +21,8 @@ E, por `layout-interface`, a tela tem três painéis (Configuração, ao vivo e
 resultados) e um cabeçalho com o estado do sistema e o botão de tema: AC-019.1 a
 AC-019.6 (indicador e tema) e AC-023.5 a AC-023.7 (depois do resultado, só "Nova
 sessão" libera a configuração, e só nesta aba). A câmera é escolhida por
-cartões com id, nome e prévia: AC-020.1 a AC-020.6 (SUP-065 a SUP-067). O tema é CSS injetado a cada
+cartões com id, nome e prévia: AC-020.1 a AC-020.6 (SUP-065 a SUP-067). A
+duração tem atalhos de 5, 10 e 15 minutos: AC-021.1 a AC-021.3. O tema é CSS injetado a cada
 execução (SUP-062). A escolha de tema e a dispensa do resultado ficam em
 `st.session_state`: a interface não grava nada em disco (SUP-058, SUP-064,
 SUP-074).
@@ -70,6 +71,9 @@ ATUALIZACAO_EM_SEGUNDOS = 2
 
 CHAVE_CONFIRMANDO = "confirmando_encerramento"
 CHAVE_TEMA = "tema"
+CHAVE_DURACAO = "duracao"
+ATALHOS_DE_DURACAO = (5, 10, 15)
+"""Os atalhos só escolhem valores dentro de 1 a 15 minutos (AC-011.2, D-15)."""
 CHAVE_CAMERA = "camera"
 """O id da câmera selecionada nesta aba; padrão, a primeira do registro (D-13)."""
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
@@ -231,6 +235,11 @@ def _alternar_tema() -> None:
 def _selecionar_camera(id_camera: str) -> None:
     """Acionar um cartão: só aquela câmera passa a ser a selecionada (AC-020.3)."""
     st.session_state[CHAVE_CAMERA] = id_camera
+
+
+def _definir_duracao(minutos: int) -> None:
+    """Atalho de duração: grava o valor no próprio campo (AC-021.1)."""
+    st.session_state[CHAVE_DURACAO] = minutos
 
 
 def _dispensar_resultado(chave: str) -> None:
@@ -427,15 +436,27 @@ def _configuracao(
         if disponiveis.motivo:
             st.caption(disponiveis.motivo)
 
-    st.session_state.setdefault("duracao", DURACAO_PADRAO)
-    minutos = st.number_input(
+    st.session_state.setdefault(CHAVE_DURACAO, DURACAO_PADRAO)
+    st.number_input(
         "Duração (minutos)",
         min_value=DURACAO_MINIMA,
         max_value=DURACAO_MAXIMA,
         step=1,
-        key="duracao",
+        key=CHAVE_DURACAO,
         disabled=travada,
     )
+    # Só o atalho igual à duração atual fica destacado; um valor digitado fora
+    # de 5, 10 e 15 não destaca nenhum (AC-021.1, AC-021.2). Travados, os
+    # atalhos continuam desenhados (D-11, AC-021.3).
+    for coluna, atalho in zip(st.columns(len(ATALHOS_DE_DURACAO)), ATALHOS_DE_DURACAO):
+        coluna.button(
+            f"{atalho} min",
+            key=f"atalho_{atalho}",
+            type="primary" if st.session_state[CHAVE_DURACAO] == atalho else "secondary",
+            disabled=travada,
+            on_click=_definir_duracao,
+            args=(atalho,),
+        )
 
     if tela.resultado_na_tela:
         st.button(
@@ -451,7 +472,7 @@ def _configuracao(
         try:
             disparada = launch.iniciar_sessao(
                 id_escolhida,
-                int(minutos),
+                int(st.session_state[CHAVE_DURACAO]),
                 data_dir=data_dir,
                 config_dir=config_dir,
             )
