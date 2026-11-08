@@ -28,8 +28,8 @@ from auto_counter.pipeline.progress import (
     ler_progresso,
 )
 from auto_counter.pipeline.state import AnotadorDoEstado, Fase
-from auto_counter.storage.connection import conectar
-from tests.export_helpers import ID_SESSAO, gravar_sessao
+from auto_counter.storage.connection import caminho_do_banco, conectar
+from tests.export_helpers import ID_SESSAO, evento, gravar_sessao
 from tests.test_pipeline_lock import grava_trava
 
 INICIO = datetime(2026, 9, 7, 11, 0, tzinfo=timezone.utc)
@@ -772,3 +772,125 @@ def test_AC_022_6_estado_sem_tm_da_tempo_estimado_none(tmp_path):
     caminho.write_text(json.dumps(dados), encoding="utf-8")
 
     assert andamento_de(tmp_path).tempo_estimado is None
+
+
+# --- layout-interface: registros, encerramento pelo usuário e chave (T-07) ---
+
+OUTRA_SESSAO = "000013-20260907T120000Z"
+
+
+def concluida(data_dir, *, iniciada_em=INICIO, id_sessao=ID_SESSAO) -> None:
+    """Estado terminal CONCLUIDA, com a planilha em disco, do `pid` deste teste."""
+    planilha = data_dir / "x.xlsx"
+    planilha.write_bytes(b"xlsx")
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=2,
+        iniciada_em=iniciada_em,
+    )
+    a.iniciar()
+    a.terminar(
+        Fase.CONCLUIDA, id_sessao=id_sessao, status="COMPLETA", planilha=str(planilha)
+    )
+
+
+def test_AC_023_2_concluida_traz_o_numero_de_eventos_gravados(tmp_path):
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(
+            conexao,
+            eventos=tuple(
+                evento(minuto=1, id_de_rastreio=f"a{i}") for i in range(3)
+            ),
+        )
+        gravar_sessao(
+            conexao,
+            id_sessao=OUTRA_SESSAO,
+            eventos=tuple(
+                evento(minuto=1, id_de_rastreio=f"b{i}") for i in range(2)
+            ),
+        )
+    concluida(tmp_path)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.registros == 3
+
+
+def test_AC_023_2_concluida_encerrada_pelo_usuario_traz_a_marca(tmp_path):
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(conexao, encerrada_pelo_usuario=True)
+    concluida(tmp_path)
+
+    assert ler_progresso(tmp_path).resultado.encerrada_pelo_usuario is True
+
+
+def test_AC_023_2_concluida_sem_encerramento_pelo_usuario_nao_traz_a_marca(tmp_path):
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(conexao)
+    concluida(tmp_path)
+
+    assert ler_progresso(tmp_path).resultado.encerrada_pelo_usuario is False
+
+
+def test_AC_023_2_banco_ilegivel_da_registros_none_sem_falhar(tmp_path):
+    caminho_do_banco(tmp_path).write_bytes(b"isto nao e um banco sqlite" * 50)
+    concluida(tmp_path)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.registros is None
+    assert resultado.encerrada_pelo_usuario is False
+
+
+def test_AC_023_6_chave_do_resultado_muda_entre_sessoes(tmp_path):
+    concluida(tmp_path)
+    primeira = ler_progresso(tmp_path).resultado.chave
+    assert ler_progresso(tmp_path).resultado.chave == primeira
+
+    concluida(tmp_path, iniciada_em=INICIO + timedelta(hours=1))
+    segunda = ler_progresso(tmp_path).resultado.chave
+
+    assert segunda != primeira
+
+
+def test_AC_023_6_todo_resultado_tem_chave_inclusive_o_de_processo_morto(tmp_path):
+    pid, criado_em = pid_morto()
+    a = anotador(tmp_path, pid=pid)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    # Sem trava viva: estado não terminal vira "falhou".
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.FALHOU
+    assert resultado.chave == f"{pid}:{INICIO.isoformat()}"
+
+
+def test_AC_023_7_resultado_e_relido_do_disco_com_a_mesma_chave(tmp_path):
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(
+            conexao, eventos=(evento(minuto=1, id_de_rastreio="a"),)
+        )
+    concluida(tmp_path)
+
+    # Duas leituras sem nada em comum além do disco: duas abas.
+    primeira = ler_progresso(tmp_path)
+    segunda = ler_progresso(tmp_path)
+
+    assert primeira == segunda
+    assert primeira.resultado.chave == segunda.resultado.chave
+    assert primeira.resultado.registros == 1
+
+
+def test_ler_progresso_continua_so_leitura(tmp_path):
+    concluida(tmp_path)
+    antes = instantaneo(tmp_path)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert not caminho_do_banco(tmp_path).exists()
+    assert resultado.registros is None
+    assert instantaneo(tmp_path) == antes

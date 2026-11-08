@@ -20,6 +20,9 @@ que recebe daqui (SUP-038, SUP-058). O relógio é injetável em `agora` (D-7).
 Por `layout-interface`, a leitura também devolve o percentual da fase, a
 participação de cada categoria, a taxa e o tempo estimado (AC-022.2 a AC-022.6),
 todos calculados aqui com inteiros (D-1), para a interface só exibir (SUP-038).
+O resultado também traz a chave que o identifica (D-7), o número de registros
+gravados e a marca de encerramento pelo usuário (D-8), lidos do banco em modo
+somente leitura (AC-023.2, AC-023.6, AC-023.7).
 """
 
 import sqlite3
@@ -37,6 +40,7 @@ from auto_counter.pipeline.lock import (
 )
 from auto_counter.pipeline.state import EstadoDaSessao, Fase, ler_estado
 from auto_counter.storage.connection import caminho_do_banco
+from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.model import SessaoGravada
 from auto_counter.storage.sessions import ler_sessao
 
@@ -192,10 +196,18 @@ class Resultado:
     aviso: str | None
     planilha: Path | None
     mensagem: str | None
+    chave: str = ""
+    """Identidade do resultado: `<pid>:<iniciada_em>` do estado (D-7). Uma sessão
+    nova tem chave nova, então o que a aba dispensou ou baixou não vaza para ela."""
     quantidades: Quantidades | None = None
     """Só na sessão concluída (SUP-060)."""
     tempo_total: int | None = None
     """`None` sem instante de término: processo morto ou estado antigo."""
+    registros: int | None = None
+    """Eventos gravados da sessão (AC-008.2); só em `CONCLUIDA`. `None` se o
+    banco não pôde ser lido."""
+    encerrada_pelo_usuario: bool = False
+    """A sessão registra encerramento pelo usuário (AC-003.6); só em `CONCLUIDA`."""
 
 
 @dataclass(frozen=True)
@@ -267,8 +279,13 @@ def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
     )
 
 
-def _sessao_do_banco(data_dir: Path, id_sessao: str | None) -> SessaoGravada | None:
-    """A linha da sessão, lida em modo somente leitura; `None` se não der."""
+def _sessao_do_banco(
+    data_dir: Path, id_sessao: str | None
+) -> tuple[SessaoGravada, int] | None:
+    """A sessão e o número dos seus eventos, na mesma conexão somente leitura.
+
+    `None` se o banco não existe, não abre ou não tem a sessão (D-8).
+    """
     caminho = caminho_do_banco(data_dir)
     if id_sessao is None or not caminho.is_file():
         return None
@@ -276,14 +293,21 @@ def _sessao_do_banco(data_dir: Path, id_sessao: str | None) -> SessaoGravada | N
         conexao = sqlite3.connect(f"{caminho.as_uri()}?mode=ro", uri=True)
         try:
             conexao.row_factory = sqlite3.Row
-            return ler_sessao(conexao, id_sessao)
+            sessao = ler_sessao(conexao, id_sessao)
+            return sessao, contar_eventos(conexao, id_sessao)
         finally:
             conexao.close()
     except (sqlite3.Error, KeyError):
         return None
 
 
+def _chave(estado: EstadoDaSessao) -> str:
+    """D-7: `<pid>:<iniciada_em>`, estável entre leituras do mesmo resultado."""
+    return f"{estado.pid}:{estado.iniciada_em.isoformat()}"
+
+
 def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
+    chave = _chave(estado)
     if not estado.fase.terminal:
         return Resultado(
             fase=Fase.FALHOU,
@@ -291,6 +315,7 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             aviso=None,
             planilha=None,
             mensagem=MENSAGEM_PROCESSO_MORREU,
+            chave=chave,
         )
 
     tempo_total = (
@@ -306,10 +331,12 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             aviso=None,
             planilha=None,
             mensagem=estado.mensagem,
+            chave=chave,
             tempo_total=tempo_total,
         )
 
-    sessao = _sessao_do_banco(data_dir, estado.id_sessao)
+    do_banco = _sessao_do_banco(data_dir, estado.id_sessao)
+    sessao, registros = (None, None) if do_banco is None else do_banco
     status = estado.status
     aviso = None
     if sessao is not None and sessao.status is not None:
@@ -327,8 +354,13 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         aviso=aviso,
         planilha=planilha,
         mensagem=mensagem,
+        chave=chave,
         quantidades=_quantidades(estado),
         tempo_total=tempo_total,
+        registros=registros,
+        encerrada_pelo_usuario=(
+            False if sessao is None else sessao.encerrada_pelo_usuario
+        ),
     )
 
 
