@@ -20,3 +20,6 @@ sentido_b: "Centro"
 linha:
   p1: {x: 1053, y: 348}
   p2: {x: 351, y: 445}
+# Imagem fixa exibida no cartao da interface (SUP-066 de layout-interface),
+# relativa a este diretorio. Opcional: sem ela, o cartao mostra "sem previa".
+preview: "000013-v3.png"
