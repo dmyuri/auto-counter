@@ -99,3 +99,34 @@ def test_AC_001_4_arquivo_da_000013_nao_declara_url():
 def test_AC_020_2_camera_000013_do_registro_declara_a_previa():
     """A prévia provisória da 000013 (R-3) está declarada no registro versionado."""
     assert _camera_do_mvp().preview == "000013-v3.png"
+
+
+def test_AC_031_1_registro_versionado_tem_exatamente_000012_e_000013_sem_rejeicao():
+    """O registro versionado passa de 1 para 2 câmeras (SUP-101)."""
+    registro = carregar_registro(DIRETORIO_DO_REGISTRO)
+
+    assert registro.rejeicoes == [], (
+        "o registro versionado não pode ter arquivo rejeitado: "
+        f"{[str(rejeicao) for rejeicao in registro.rejeicoes]}"
+    )
+    assert len(registro.cameras) == 2
+    assert sorted(camera.id for camera in registro.cameras) == [
+        "000012",
+        "000013",
+    ]
+
+
+def test_AC_031_4_url_da_000012_preserva_os_zeros_a_esquerda(monkeypatch):
+    """A URL da 000012 é derivada do id, com os zeros à esquerda preservados."""
+    monkeypatch.setenv(VARIAVEL_BASE_URL, "https://exemplo.invalid/videos")
+
+    registro = carregar_registro(DIRETORIO_DO_REGISTRO)
+    por_id = {camera.id: camera for camera in registro.cameras}
+    assert "000012" in por_id, (
+        f"a câmera 000012 não está no registro versionado; ids: {sorted(por_id)}"
+    )
+
+    assert (
+        url_do_clipe(por_id["000012"])
+        == "https://exemplo.invalid/videos/000012/last_video.mp4"
+    )

@@ -1,0 +1,18 @@
+# Camera 000012 - Praia x Mariz Barros.
+#
+# VALORES PROVISORIOS: a linha e os rotulos dos sentidos abaixo sao
+# placeholders. Quem os fixa e a calibracao (camera preview 000012), conferindo
+# no PNG qual lado e qual, como foi feito com a 000013 (SUP-104).
+#
+# O id fica entre aspas para preservar os zeros a esquerda (SUP-001): sem
+# aspas o YAML leria 000012 como numero.
+# Nenhuma URL aqui: ela e derivada do id (AC-001.4) sobre a base URL que vem
+# de AUTO_COUNTER_BASE_URL.
+# Coordenadas em pixels absolutos do frame nativo da camera (SUP-002).
+id: "000012"
+nome: "Praia x Mariz Barros"
+sentido_a: "Sentido A"
+sentido_b: "Sentido B"
+linha:
+  p1: {x: 100, y: 300}
+  p2: {x: 600, y: 300}
