@@ -9,10 +9,17 @@ A interface só importa `streamlit`, a biblioteca padrão, `dotenv` e este pacot
 (SUP-038), então os limites e o diretório padrão do registro são reexportados
 daqui: a regra continua sendo a de `captura-clipes` e `configuracao-camera`,
 sem cópia.
+
+Por `layout-interface` (AC-020.2, SUP-066), este módulo também lê a imagem de
+prévia que o mantenedor indicou para a câmera. A prévia é uma imagem fixa em
+disco: nada é capturado, nada é baixado e a câmera nunca é acessada.
 """
 
 from dataclasses import dataclass
 from pathlib import Path
+
+import cv2
+import numpy as np
 
 from auto_counter.cameras.model import Camera
 from auto_counter.cameras.registry import (
@@ -33,6 +40,7 @@ __all__ = [
     "DURACAO_PADRAO",
     "CamerasDisponiveis",
     "cameras_disponiveis",
+    "previa_da_camera",
 ]
 
 
@@ -73,3 +81,26 @@ def cameras_disponiveis(config_dir: str | Path) -> CamerasDisponiveis:
     return CamerasDisponiveis(
         cameras=tuple(registro.cameras), motivo=motivo, rejeicoes=rejeicoes
     )
+
+
+def previa_da_camera(camera: Camera, config_dir: str | Path) -> bytes | None:
+    """Os bytes da imagem de prévia da câmera, ou `None` se não há prévia.
+
+    Devolve `None` quando a câmera não indica `preview` e quando o arquivo
+    indicado, relativo a `config_dir`, não existe, não pode ser lido ou não é uma
+    imagem que o OpenCV decodifica (AC-020.2). Nunca levanta, e nunca acessa a
+    câmera nem a rede: a interface mostra "sem prévia" no lugar da imagem.
+
+    Devolve os bytes originais do arquivo, e não a imagem decodificada; a
+    decodificação serve só para saber que a imagem abre.
+    """
+    if camera.preview is None:
+        return None
+    try:
+        conteudo = (Path(config_dir) / camera.preview).read_bytes()
+        decodificada = cv2.imdecode(
+            np.frombuffer(conteudo, dtype=np.uint8), cv2.IMREAD_COLOR
+        )
+    except (OSError, ValueError, cv2.error):
+        return None
+    return conteudo if decodificada is not None else None
