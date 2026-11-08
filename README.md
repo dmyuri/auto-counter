@@ -11,7 +11,9 @@ A câmera publica um único arquivo — `<base_url>/<id>/last_video.mp4` — com
 
 O resultado é gravado no SQLite e exportado como XLSX de três abas (eventos, agregado por minuto, metadados da sessão). Os vídeos são apagados ao fim da sessão, salvo quando a flag de preservação (`--keep-clips`) é usada, ou quando a opção **Manter clipes de vídeo** é ligada na interface.
 
-Câmera do MVP: **000013** — 1280×720 a 30 fps, H.264, clipes de 59,93 s e ~32 MB. Uma sessão de 15 min baixa ~480 MB.
+Câmera do MVP: **000013** (Praça Getúlio Vargas) — 1280×720 a 30 fps, H.264, clipes de 59,93 s e ~32 MB. Uma sessão de 15 min baixa ~480 MB.
+
+Câmera alternativa: **000012** (Praia x Mariz Barros) — frame de 1920×1080, com linha e prévia próprias, publicada no mesmo esquema da 000013. Ela aparece na interface ao lado da 000013 e vem selecionada por padrão, por ter o menor id. A validação de acurácia continua medida só na 000013.
 
 ## Stack
 - Linguagem: Python 3.11+
