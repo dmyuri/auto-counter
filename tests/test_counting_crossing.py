@@ -25,11 +25,14 @@ documentação da `supervision`: é o que os dois testes de AC-006.3 fixam.
 """
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import numpy as np
 import supervision as sv
 
+from auto_counter.cameras.geometry import normal_da_linha
 from auto_counter.cameras.model import Camera, Linha, Ponto
+from auto_counter.cameras.registry import carregar_registro
 from auto_counter.counting.config import Categoria
 from auto_counter.counting.crossing import AvaliadorDeCruzamento
 from auto_counter.counting.tracking import rastreador_para_o_clipe
@@ -303,3 +306,48 @@ def test_AC_006_2_atravessar_o_prolongamento_da_linha_fora_do_segmento_nao_gera_
     eventos = eventos_da_trajetoria([(140, 300), (120, 300), (80, 300), (60, 300)])
 
     assert eventos == []
+
+
+def test_AC_032_5_cruzamentos_na_linha_da_000012_recebem_os_rotulos_dela():
+    """Os rótulos vêm da câmera da sessão, na linha calibrada da 000012.
+
+    As trajetórias são derivadas da linha lida do registro (não há coordenada
+    fixa): atravessam o ponto médio, uma a favor da normal de SUP-003 e outra
+    contra. A 000012 usa os mesmos textos da 000013 por decisão do autor, então
+    o teste repete a prova com rótulos de fixture, que só podem vir da câmera.
+    """
+    diretorio = Path(__file__).resolve().parents[1] / "config" / "cameras"
+    por_id = {c.id: c for c in carregar_registro(diretorio).cameras}
+    camera_000012 = por_id["000012"]
+
+    linha = camera_000012.linha
+    meio = ((linha.p1.x + linha.p2.x) / 2, (linha.p1.y + linha.p2.y) / 2)
+    nx, ny = normal_da_linha(linha)
+
+    def ponto(distancia):
+        return (meio[0] + nx * distancia, meio[1] + ny * distancia)
+
+    a_favor = [ponto(-60), ponto(-20), ponto(20), ponto(60)]
+    contra = list(reversed(a_favor))
+
+    com_rotulos_da_000012 = camera_000012
+    com_rotulos_de_fixture = camera_000012.model_copy(
+        update={"sentido_a": "FIXTURE-A", "sentido_b": "FIXTURE-B"}
+    )
+    for camera_do_teste, rotulo_a, rotulo_b in (
+        (
+            com_rotulos_da_000012,
+            camera_000012.sentido_a,
+            camera_000012.sentido_b,
+        ),
+        (com_rotulos_de_fixture, "FIXTURE-A", "FIXTURE-B"),
+    ):
+        eventos_a = eventos_da_trajetoria(
+            a_favor, camera_do_teste=camera_do_teste, id_do_bytetrack=1
+        )
+        eventos_b = eventos_da_trajetoria(
+            contra, camera_do_teste=camera_do_teste, id_do_bytetrack=2
+        )
+
+        assert [e.sentido for e in eventos_a] == [rotulo_a]
+        assert [e.sentido for e in eventos_b] == [rotulo_b]
