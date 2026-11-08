@@ -261,3 +261,28 @@ def test_AC_032_3_aba_nova_seleciona_a_000012(monkeypatch, ambiente):
     rotulos = rotulos_dos_cartoes(at)
     assert rotulos["camera_000012"] == "SELECIONADA"
     assert rotulos["camera_000013"] != "SELECIONADA"
+
+
+def test_AC_032_4_iniciar_com_o_cartao_da_000012_dispara_a_sessao_da_000012(
+    monkeypatch, ambiente, disparo
+):
+    aponta_para_o_registro_versionado(monkeypatch)
+    at = abre_a_interface()
+
+    # A 000012 já vem selecionada: passa pela 000013 antes, para provar que o
+    # clique no cartão da 000012 é o que vale.
+    at.button(key="camera_000013").click()
+    at = at.run()
+    assert at.session_state["camera"] == "000013"
+    at.button(key="camera_000012").click()
+    at = at.run()
+    assert at.session_state["camera"] == "000012"
+
+    at.number_input[0].set_value(1)
+    at = at.run()
+    botao_iniciar(at).click()
+    at = at.run()
+
+    assert [(chamada[0], chamada[1]) for chamada in disparo.chamadas] == [
+        ("000012", 1)
+    ]
