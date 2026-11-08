@@ -117,6 +117,15 @@ from auto_counter.storage.sessions import (
 SUBDIRETORIO_DE_PREVIEWS = "previews"
 """Onde o PNG cai dentro do diretório de dados quando `--out` é omitido."""
 
+TETO_DE_ENVIO_DO_STREAMLIT_EM_MB = 2048
+"""Teto do `file_uploader` do Streamlit, em MB (R-2 de `upload-videos`).
+
+O componente mantém o arquivo inteiro em memória e recusa, com a mensagem dele,
+o que passar deste teto, antes de o app ver o arquivo. Com 2048 MB, todo arquivo
+de 1 GB a ~2 GB chega ao app, que mostra a mensagem de AC-027.10. O limite de
+1 GB **em bytes** é do app (`pipeline/envio.py`), não do Streamlit.
+"""
+
 app = typer.Typer(
     name="auto-counter",
     help="Contagem e classificação automática de veículos por visão computacional.",
@@ -632,6 +641,8 @@ def abrir_interface(
         str(port),
         "--browser.gatherUsageStats",
         "false",
+        "--server.maxUploadSize",
+        str(TETO_DE_ENVIO_DO_STREAMLIT_EM_MB),
         "--",
         "--config-dir",
         str(config_dir.resolve()),
