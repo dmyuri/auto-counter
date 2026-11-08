@@ -20,7 +20,8 @@ total no resultado). A tela só exibe o que `ler_progresso` devolve (SUP-058).
 E, por `layout-interface`, a tela tem três painéis (Configuração, ao vivo e
 resultados) e um cabeçalho com o estado do sistema e o botão de tema: AC-019.1 a
 AC-019.6 (indicador e tema) e AC-023.5 a AC-023.7 (depois do resultado, só "Nova
-sessão" libera a configuração, e só nesta aba). O tema é CSS injetado a cada
+sessão" libera a configuração, e só nesta aba). A câmera é escolhida por
+cartões com id, nome e prévia: AC-020.1 a AC-020.6 (SUP-065 a SUP-067). O tema é CSS injetado a cada
 execução (SUP-062). A escolha de tema e a dispensa do resultado ficam em
 `st.session_state`: a interface não grava nada em disco (SUP-058, SUP-064,
 SUP-074).
@@ -46,6 +47,7 @@ from auto_counter.pipeline.cameras import (
     DURACAO_MINIMA,
     DURACAO_PADRAO,
     cameras_disponiveis,
+    previa_da_camera,
 )
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
@@ -68,6 +70,8 @@ ATUALIZACAO_EM_SEGUNDOS = 2
 
 CHAVE_CONFIRMANDO = "confirmando_encerramento"
 CHAVE_TEMA = "tema"
+CHAVE_CAMERA = "camera"
+"""O id da câmera selecionada nesta aba; padrão, a primeira do registro (D-13)."""
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
 """A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074)."""
 
@@ -224,6 +228,11 @@ def _alternar_tema() -> None:
     st.session_state[CHAVE_TEMA] = TEMA_ESCURO if atual == TEMA_CLARO else TEMA_CLARO
 
 
+def _selecionar_camera(id_camera: str) -> None:
+    """Acionar um cartão: só aquela câmera passa a ser a selecionada (AC-020.3)."""
+    st.session_state[CHAVE_CAMERA] = id_camera
+
+
 def _dispensar_resultado(chave: str) -> None:
     """"Nova sessão": esta aba para de mostrar o resultado (AC-023.6, SUP-074)."""
     st.session_state[CHAVE_RESULTADO_DISPENSADO] = chave
@@ -366,6 +375,31 @@ def _area_da_sessao(data_dir: Path, indicador_da_pagina: str) -> None:
         st.session_state[CHAVE_CONFIRMANDO] = False
 
 
+def _cartao(camera, config_dir: Path, id_selecionada: str, travada: bool) -> None:
+    """Cartão da câmera: prévia ou "sem prévia", id, nome e o botão (D-13).
+
+    A prévia é a imagem fixa que o mantenedor indicou: a interface não acessa a
+    câmera para obtê-la (AC-020.2). Id e nome aparecem como texto; não há campo
+    para digitar id, URL ou endereço (AC-020.1, SUP-067).
+    """
+    selecionada = camera.id == id_selecionada
+    with st.container(border=True):
+        previa = previa_da_camera(camera, config_dir)
+        if previa is None:
+            st.caption("sem prévia")
+        else:
+            st.image(previa, width="stretch")
+        st.markdown(f"`{camera.id}` **{camera.nome}**")
+        st.button(
+            "SELECIONADA" if selecionada else "Selecionar",
+            key=f"camera_{camera.id}",
+            type="primary" if selecionada else "secondary",
+            disabled=travada,
+            on_click=_selecionar_camera,
+            args=(camera.id,),
+        )
+
+
 def _configuracao(
     config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
 ) -> None:
@@ -378,20 +412,16 @@ def _configuracao(
 
     id_escolhida = None
     if disponiveis.cameras:
-        nomes = {camera.id: camera.nome for camera in disponiveis.cameras}
-        if st.session_state.get("camera") not in nomes:
-            st.session_state.pop("camera", None)
-        # Os controles travados continuam desenhados (D-11): o Streamlit descarta
-        # o estado de widget que não é desenhado, e é ele que devolve a câmera e
-        # a duração anteriores depois de "Nova sessão" (AC-023.6).
-        # O usuário lê o nome do local; o id fica só do lado de dentro (AC-011.1).
-        id_escolhida = st.selectbox(
-            "Câmera",
-            options=list(nomes),
-            format_func=lambda id_: nomes[id_],
-            key="camera",
-            disabled=travada,
-        )
+        ids = [camera.id for camera in disponiveis.cameras]
+        # Sem escolha, ou com um id que sumiu do registro, vale a primeira (D-13).
+        if st.session_state.get(CHAVE_CAMERA) not in ids:
+            st.session_state[CHAVE_CAMERA] = ids[0]
+        id_escolhida = st.session_state[CHAVE_CAMERA]
+        # Cartões e duração travados continuam desenhados (D-11): o Streamlit
+        # descarta o estado de widget que não é desenhado, e é ele que devolve a
+        # duração anterior depois de "Nova sessão" (AC-023.6).
+        for camera in disponiveis.cameras:
+            _cartao(camera, config_dir, id_escolhida, travada)
     else:
         st.warning("Nenhuma câmera disponível.")
         if disponiveis.motivo:

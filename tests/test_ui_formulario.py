@@ -18,6 +18,7 @@ navegador, toca a rede ou grava fora de `tmp_path`.
 """
 
 import ast
+import re
 import shutil
 import sys
 from datetime import datetime, timezone
@@ -81,6 +82,17 @@ def botao_iniciar(at: AppTest):
     return botoes[0]
 
 
+def botoes_de_cartao(at: AppTest) -> list:
+    """Os botões dos cartões de câmera (`layout-interface`, AC-020.1)."""
+    return [b for b in at.button if (b.key or "").startswith("camera_")]
+
+
+def cartoes(at: AppTest) -> list[tuple[str, str]]:
+    """(id, nome do local) de cada cartão, na ordem em que aparecem."""
+    achados = [re.fullmatch(r"`(\w+)` \*\*(.+)\*\*", m.value) for m in at.markdown]
+    return [(a.group(1), a.group(2)) for a in achados if a]
+
+
 def test_AC_011_1_a_interface_lista_exatamente_as_cameras_validas_pelo_nome(
     tmp_path, monkeypatch
 ):
@@ -89,8 +101,7 @@ def test_AC_011_1_a_interface_lista_exatamente_as_cameras_validas_pelo_nome(
     at = abre_a_interface()
 
     assert not at.exception
-    assert len(at.selectbox) == 1
-    assert at.selectbox[0].options == [
+    assert [nome for _, nome in cartoes(at)] == [
         "Via de teste - camera 13",
         "Via de teste - camera 42",
     ]
@@ -101,7 +112,7 @@ def test_AC_011_1_camera_rejeitada_nao_aparece_na_lista(tmp_path, monkeypatch):
 
     at = abre_a_interface()
 
-    assert at.selectbox[0].options == ["Via de teste - camera 13"]
+    assert [nome for _, nome in cartoes(at)] == ["Via de teste - camera 13"]
 
 
 def test_AC_011_1_a_interface_nao_tem_campo_de_texto(tmp_path, monkeypatch):
@@ -132,7 +143,7 @@ def test_AC_011_3_registro_sem_camera_valida_avisa_e_desabilita_iniciar(
     at = abre_a_interface()
 
     assert any("Nenhuma câmera disponível" in w.value for w in at.warning)
-    assert len(at.selectbox) == 0
+    assert botoes_de_cartao(at) == []
     assert botao_iniciar(at).disabled is True
 
 
@@ -189,7 +200,7 @@ def test_iniciar_dispara_com_a_camera_e_a_duracao_escolhidas(
     )
 
     at = abre_a_interface()
-    at.selectbox[0].select("Via de teste - camera 42")
+    at.button(key="camera_000042").click()
     at.number_input[0].set_value(7)
     at = at.run()
     botao_iniciar(at).click()

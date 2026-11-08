@@ -39,6 +39,7 @@ from tests.test_ui_acompanhamento import (  # noqa: F401  (fixtures usadas por n
 from tests.test_ui_formulario import (  # noqa: F401  (fixtures usadas por nome)
     abre_a_interface,
     ambiente,
+    botoes_de_cartao,
     registro_com,
 )
 
@@ -113,7 +114,7 @@ def botao_de_tema(at) -> str:
 
 
 def camera_exibida(at):
-    return at.selectbox[0].value
+    return at.session_state["camera"]
 
 
 def duracao_exibida(at):
@@ -246,13 +247,13 @@ def test_AC_023_5_resultado_exibido_esconde_iniciar_trava_configuracao_e_mostra_
 
     assert "Iniciar sessão" not in botoes(at)
     assert "Nova sessão" in botoes(at)
-    assert at.selectbox[0].disabled is True
+    assert all(b.disabled for b in botoes_de_cartao(at))
     assert at.number_input[0].disabled is True
 
 
 def test_AC_023_6_nova_sessao_some_com_o_resultado_e_volta_a_configuracao(data_dir):
     at = abre_a_interface()
-    at.selectbox[0].select("Via de teste - camera 42")
+    at.button(key="camera_000042").click()
     at.number_input[0].set_value(7)
     at = at.run()
     escolhidas = (camera_exibida(at), duracao_exibida(at))
@@ -276,7 +277,7 @@ def test_AC_023_6_nova_sessao_some_com_o_resultado_e_volta_a_configuracao(data_d
     assert "status COMPLETA" not in textos(at)
     assert "Nova sessão" not in botoes(at)
     assert "Iniciar sessão" in botoes(at)
-    assert at.selectbox[0].disabled is False
+    assert not any(b.disabled for b in botoes_de_cartao(at))
     assert at.number_input[0].disabled is False
     assert (camera_exibida(at), duracao_exibida(at)) == escolhidas
     assert escolhidas[1] == 7
