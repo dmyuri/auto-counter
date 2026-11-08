@@ -682,3 +682,117 @@ def test_AC_022_3_clipe_que_falha_no_meio_fica_fora_de_k_de_ponta_a_ponta(
     assert final.minutos_com_dado == 2
     banco = contagem_do_banco(data_dir, estado.id_sessao)
     assert final.veiculos_nos_minutos_com_dado == sum(banco.values()) == 2
+
+
+# --- download-clipes: manter_videos e clipes no estado de ponta a ponta (T-04) ---
+
+
+def test_AC_024_2_com_a_opcao_os_clipes_ficam_e_o_estado_os_lista(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 3)
+
+    estado, _ = executa(data_dir, servidor, relogio, minutos=3, manter_videos=True)
+
+    assert estado.fase is Fase.CONCLUIDA
+    assert estado.manter_videos is True
+    final = ler_estado(data_dir)
+    assert final.manter_videos is True
+    assert [c.minuto for c in final.clipes] == [1, 2, 3]
+    for clipe in final.clipes:
+        assert clipe.caminho.is_file()
+    assert sorted(videos(dir_da_sessao(data_dir))) == [
+        "minuto-01.mp4",
+        "minuto-02.mp4",
+        "minuto-03.mp4",
+    ]
+
+
+def test_AC_024_3_sem_a_opcao_nenhum_video_fica_e_o_estado_registra_false(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 2)
+
+    estado, _ = executa(data_dir, servidor, relogio)
+
+    assert estado.fase is Fase.CONCLUIDA
+    final = ler_estado(data_dir)
+    assert final.manter_videos is False
+    assert final.clipes is None
+    assert videos(dir_da_sessao(data_dir)) == []
+
+
+def test_AC_025_2_minuto_perdido_nao_entra_nos_clipes_do_estado(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    # Minuto 2 perdido; o minuto 3 pega o clipe publicado em t=100.
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (100.0, "clipe-c")],
+        clipes_legiveis("clipe-a", "clipe-c"),
+    )
+
+    estado, _ = executa(
+        data_dir, servidor, relogio, minutos=3, manter_videos=True
+    )
+
+    assert estado.fase is Fase.CONCLUIDA
+    final = ler_estado(data_dir)
+    assert [c.minuto for c in final.clipes] == [1, 3]
+
+
+def test_AC_025_6_processamento_cancelado_nao_grava_clipes(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 2)
+    pedida = ParadaDuble()
+    pedida.pedida = True
+    fabricas = iter([ParadaNunca, lambda: pedida])
+
+    estado, _ = executa(
+        data_dir,
+        servidor,
+        relogio,
+        criar_parada=lambda: next(fabricas)(),
+        manter_videos=True,
+    )
+
+    assert estado.fase is Fase.PROCESSAMENTO_CANCELADO
+    assert ler_estado(data_dir).clipes is None
+    assert videos(dir_da_sessao(data_dir)) == ["minuto-01.mp4", "minuto-02.mp4"]
+
+
+def test_AC_025_6_sem_planilha_nao_grava_clipes(data_dir, modelo, clipes_legiveis):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 2)
+    pedida = ParadaDuble()
+    pedida.pedida = True
+
+    estado, _ = executa(
+        data_dir, servidor, relogio, criar_parada=lambda: pedida, manter_videos=True
+    )
+
+    assert estado.fase is Fase.SEM_PLANILHA
+    assert ler_estado(data_dir).clipes is None
+
+
+def test_falha_ao_listar_clipes_nao_derruba_a_sessao(
+    data_dir, modelo, clipes_legiveis, monkeypatch, capsys
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 2)
+    monkeypatch.setattr(
+        "auto_counter.pipeline.run.clipes_mantidos",
+        lambda *a, **k: (_ for _ in ()).throw(RuntimeError("falha ao listar")),
+    )
+
+    estado, _ = executa(data_dir, servidor, relogio, manter_videos=True)
+
+    assert estado.fase is Fase.CONCLUIDA
+    assert estado.planilha is not None
+    assert ler_estado(data_dir).clipes is None
+    assert "aviso" in capsys.readouterr().err

@@ -35,11 +35,24 @@ SUP-074).
 Esta é só a casca (SUP-038): nenhuma regra de captura, contagem ou exportação
 mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 `auto_counter.pipeline`, e é o `pipeline` que lê o progresso e dispara a sessão.
+
+E, por `download-clipes`, o painel de Configuração tem a opção "Manter
+clipes de vídeo", desligada por padrão (AC-024.1), repassada a
+`launch.iniciar_sessao` ao iniciar (AC-024.2, AC-024.3) e indisponível com
+sessão em andamento ou resultado na tela (AC-024.4).
+
+E, no painel "Sessão finalizada", a lista dos clipes mantidos com um botão de
+download por clipe e o botão do `.zip` (AC-025.1 a AC-025.4, SUP-073, D-6, D-7),
+só com os clipes presentes em disco e o aviso dos ausentes (AC-025.5), nada disso
+quando a sessão foi cancelada, ficou sem planilha ou falhou (AC-025.6), e a
+mensagem de AC-024.3 quando os clipes não foram mantidos. Nome, tamanho, presença
+e `.zip` vêm do `pipeline` (SUP-038).
 """
 
 import argparse
 import sys
 from dataclasses import dataclass
+from functools import partial
 from pathlib import Path
 
 import streamlit as st
@@ -55,10 +68,12 @@ from auto_counter.pipeline.cameras import (
     cameras_disponiveis,
     previa_da_camera,
 )
+from auto_counter.pipeline.clipes import montar_zip
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
     TAXA_SEM_DADO,
     Andamento,
+    ClipeParaBaixar,
     Participacoes,
     Progresso,
     Quantidades,
@@ -87,6 +102,16 @@ CHAVE_CAMERA = "camera"
 # O id da câmera selecionada nesta aba; padrão, a primeira do registro (D-13).
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
 # A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074).
+CHAVE_MANTER_CLIPES = "manter_clipes"
+# A opção "Manter clipes de vídeo" (AC-024.1, D-8 de `download-clipes`).
+CHAVE_CLIPES_BAIXADOS = "clipes_baixados"
+# Conjunto de `f"{chave}:{minuto}"` dos clipes cujo botão foi acionado (D-7).
+CHAVE_ZIP_BAIXADO = "zip_baixado"
+# A `chave` do resultado cujo `.zip` foi baixado nesta aba (D-7, SUP-073).
+MIME_DO_MP4 = "video/mp4"
+MIME_DO_ZIP = "application/zip"
+MENSAGEM_CLIPES_NAO_MANTIDOS = "Clipes não foram mantidos nesta sessão."
+# AC-024.3: a sessão terminou sem que a opção estivesse ligada.
 
 TEMA_ESCURO = "escuro"
 TEMA_CLARO = "claro"
@@ -402,6 +427,52 @@ CSS_DOS_COMPONENTES = """
   font-weight: 700;
 }
 
+.st-key-clipes_lista {
+  background: var(--panel2); border: 1px solid var(--line); padding: 16px;
+  gap: 8px;
+}
+.st-key-clipes_lista [data-testid="stMarkdownContainer"] p { margin: 0; }
+[class*="st-key-clipe_"] [data-testid="stDownloadButton"] button {
+  width: 100%; min-height: 36px; font-size: 12px;
+}
+.st-key-clipes_zip [data-testid="stDownloadButton"] button {
+  background: var(--accent); color: var(--accentInk); border: none;
+  font-weight: 700; width: 100%;
+}
+
+/* clip retention toggle */
+.st-key-manter_clipes_cartao {
+  background: var(--panel2); border: 1px solid var(--line); padding: 16px;
+}
+.st-key-manter_clipes_cartao [data-testid="stMarkdownContainer"] p { margin: 0; font-size: 14px; }
+.st-key-manter_clipes_cartao [data-testid="stCaptionContainer"] p { margin: 2px 0 0; font-size: 12px; }
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] { display: flex; justify-content: flex-end; }
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label {
+  display: flex; align-items: center; cursor: pointer;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label > div:first-of-type {
+  width: 56px; height: 28px; border-radius: 1px; position: relative;
+  background: var(--line); border: 1px solid var(--line); flex: none;
+  transition: background .15s ease, border-color .15s ease;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label > div:first-of-type::after {
+  content: ""; position: absolute; top: 4px; left: 4px;
+  width: 20px; height: 20px; border-radius: 1px;
+  background: var(--bg); transition: left .15s ease;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label:has(input:checked)
+> div:first-of-type {
+  background: var(--accent); border-color: var(--accent);
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label:has(input:checked)
+> div:first-of-type::after {
+  left: calc(100% - 24px);
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label > div:first-of-type svg {
+  display: none;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"]:has(input:disabled) { opacity: .55; }
+
 /* notices */
 [data-testid="stAlertContainer"] {
   border-radius: 0; background: var(--accentSoft) !important;
@@ -534,6 +605,18 @@ def _marcar_baixada(chave: str) -> None:
     Não confirma que o navegador gravou o arquivo: o Streamlit não tem como saber.
     """
     st.session_state[CHAVE_PLANILHA_BAIXADA] = chave
+
+
+def _marcar_clipe_baixado(chave: str, minuto: int) -> None:
+    """Registra o acionamento do botão de um clipe nesta aba (SUP-073)."""
+    baixados = set(st.session_state.get(CHAVE_CLIPES_BAIXADOS, ()))
+    baixados.add(f"{chave}:{minuto}")
+    st.session_state[CHAVE_CLIPES_BAIXADOS] = baixados
+
+
+def _marcar_zip_baixado(chave: str) -> None:
+    """Registra o acionamento do botão do `.zip` nesta aba (SUP-073)."""
+    st.session_state[CHAVE_ZIP_BAIXADO] = chave
 
 
 def _dispensar_resultado(chave: str) -> None:
@@ -797,6 +880,65 @@ def _cartao_da_planilha(resultado: Resultado) -> None:
             )
 
 
+def _bytes_do_clipe(caminho: Path) -> bytes:
+    return caminho.read_bytes()
+
+
+def _bytes_do_zip(clipes: tuple[ClipeParaBaixar, ...]) -> bytes:
+    return montar_zip([(c.caminho, c.nome) for c in clipes])
+
+
+def _linha_do_clipe(clipe: ClipeParaBaixar, resultado: Resultado, zip_baixado: bool):
+    """Nome, duração, tamanho e o botão de um clipe (AC-025.1, AC-025.3)."""
+    baixado = zip_baixado or (
+        f"{resultado.chave}:{clipe.minuto}"
+        in st.session_state.get(CHAVE_CLIPES_BAIXADOS, ())
+    )
+    with st.container(key=f"clipe_{clipe.minuto}"):
+        nome, duracao, tamanho, botao = st.columns(
+            [5, 1, 1.5, 1.5], vertical_alignment="center"
+        )
+        nome.markdown(clipe.nome)
+        duracao.markdown(clipe.duracao)
+        tamanho.markdown(clipe.tamanho)
+        with botao:
+            st.download_button(
+                "✓" if baixado else "Baixar",
+                data=partial(_bytes_do_clipe, clipe.caminho),
+                file_name=clipe.nome,
+                mime=MIME_DO_MP4,
+                key=f"baixar_clipe_{resultado.chave}_{clipe.minuto}",
+                on_click=_marcar_clipe_baixado,
+                args=(resultado.chave, clipe.minuto),
+            )
+
+
+def _clipes(resultado: Resultado) -> None:
+    """Os clipes mantidos da sessão concluída (D-10, AC-024.3, AC-025.1 a 25.5)."""
+    if not resultado.manter_clipes:
+        st.info(MENSAGEM_CLIPES_NAO_MANTIDOS)
+        return
+    if resultado.clipes_ausentes:
+        st.warning(f"{resultado.clipes_ausentes} clipes não estão mais em disco.")
+    if not resultado.clipes:
+        return
+    zip_baixado = st.session_state.get(CHAVE_ZIP_BAIXADO) == resultado.chave
+    with st.container(key="clipes_lista"):
+        st.markdown(f"**{resultado.titulo_dos_clipes}**")
+        for clipe in resultado.clipes:
+            _linha_do_clipe(clipe, resultado, zip_baixado)
+        with st.container(key="clipes_zip"):
+            st.download_button(
+                "✓ Baixado" if zip_baixado else "Baixar todos (.zip)",
+                data=partial(_bytes_do_zip, resultado.clipes),
+                file_name=f"{resultado.id_camera}_clipes.zip",
+                mime=MIME_DO_ZIP,
+                key=f"baixar_zip_{resultado.chave}",
+                on_click=_marcar_zip_baixado,
+                args=(resultado.chave,),
+            )
+
+
 def _resultado(resultado: Resultado) -> None:
     """O painel "Sessão finalizada" (AC-023.2 a AC-023.4)."""
     st.subheader("Sessão finalizada")
@@ -809,6 +951,7 @@ def _resultado(resultado: Resultado) -> None:
             _cartao_da_planilha(resultado)
         elif resultado.mensagem:
             st.warning(resultado.mensagem)
+        _clipes(resultado)
     elif resultado.fase is Fase.SEM_PLANILHA:
         st.warning(
             f"Status da sessão: {resultado.status}. {resultado.mensagem}"
@@ -931,6 +1074,24 @@ def _configuracao(
             args=(atalho,),
         )
 
+    st.markdown('<span class="rotulo">Saída</span>', unsafe_allow_html=True)
+    st.session_state.setdefault(CHAVE_MANTER_CLIPES, False)
+    with st.container(key="manter_clipes_cartao"):
+        texto, controle = st.columns([5, 1], vertical_alignment="center")
+        with texto:
+            st.markdown("**Manter clipes de vídeo**")
+            st.caption(
+                "Salva os trechos processados para download ao final. A "
+                "planilha .xlsx é sempre gerada."
+            )
+        with controle:
+            st.checkbox(
+                "Manter clipes de vídeo",
+                key=CHAVE_MANTER_CLIPES,
+                disabled=travada,
+                label_visibility="collapsed",
+            )
+
     if tela.resultado_na_tela:
         st.button(
             "Nova sessão",
@@ -959,6 +1120,7 @@ def _configuracao(
                 int(st.session_state[CHAVE_DURACAO]),
                 data_dir=data_dir,
                 config_dir=config_dir,
+                manter_videos=bool(st.session_state[CHAVE_MANTER_CLIPES]),
             )
         except OutraSessaoEmAndamentoError as falha:
             st.error(str(falha))

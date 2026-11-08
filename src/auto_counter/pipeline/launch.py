@@ -67,6 +67,7 @@ def iniciar_sessao(
     *,
     data_dir: str | Path,
     config_dir: str | Path,
+    manter_videos: bool = False,
     popen: Callable[..., subprocess.Popen] = subprocess.Popen,
 ) -> SessaoDisparada:
     """Dispara `session run` num processo destacado e devolve o acesso a ele.
@@ -75,8 +76,11 @@ def iniciar_sessao(
     sessão em curso levanta `OutraSessaoEmAndamentoError` (AC-013.1), nos dois
     casos antes de abrir log ou disparar qualquer coisa.
 
-    Nunca passa `--keep-clips` (D-13): o usuário da interface faz três coisas, e
-    manter vídeo não é uma delas.
+    `manter_videos` é a escolha feita na interface (SUP-076): com `True`,
+    `--keep-clips` entra no comando, a mesma flag de `session run` do
+    terminal. A interface não tem regra própria de descarte, e é por isso que
+    fechar a aba não muda o resultado (AC-024.2) — quem decide o destino dos
+    vídeos é o processo destacado, não esta função.
     """
     duracao = validar_duracao(minutos)
     data_dir = Path(data_dir)
@@ -110,6 +114,8 @@ def iniciar_sessao(
         "--config-dir",
         str(config_dir),
     ]
+    if manter_videos:
+        comando.append("--keep-clips")
     with open(log, "wb") as saida:
         processo = popen(
             comando,

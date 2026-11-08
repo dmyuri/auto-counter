@@ -99,3 +99,73 @@ def test_AC_001_4_arquivo_da_000013_nao_declara_url():
 def test_AC_020_2_camera_000013_do_registro_declara_a_previa():
     """A prévia provisória da 000013 (R-3) está declarada no registro versionado."""
     assert _camera_do_mvp().preview == "000013-v3.png"
+
+
+def test_AC_031_1_registro_versionado_tem_exatamente_000012_e_000013_sem_rejeicao():
+    """O registro versionado passa de 1 para 2 câmeras (SUP-101)."""
+    registro = carregar_registro(DIRETORIO_DO_REGISTRO)
+
+    assert registro.rejeicoes == [], (
+        "o registro versionado não pode ter arquivo rejeitado: "
+        f"{[str(rejeicao) for rejeicao in registro.rejeicoes]}"
+    )
+    assert len(registro.cameras) == 2
+    assert sorted(camera.id for camera in registro.cameras) == [
+        "000012",
+        "000013",
+    ]
+
+
+def test_AC_031_4_url_da_000012_preserva_os_zeros_a_esquerda(monkeypatch):
+    """A URL da 000012 é derivada do id, com os zeros à esquerda preservados."""
+    monkeypatch.setenv(VARIAVEL_BASE_URL, "https://exemplo.invalid/videos")
+
+    registro = carregar_registro(DIRETORIO_DO_REGISTRO)
+    por_id = {camera.id: camera for camera in registro.cameras}
+    assert "000012" in por_id, (
+        f"a câmera 000012 não está no registro versionado; ids: {sorted(por_id)}"
+    )
+
+    assert (
+        url_do_clipe(por_id["000012"])
+        == "https://exemplo.invalid/videos/000012/last_video.mp4"
+    )
+
+
+def _camera_do_registro(id_da_camera):
+    registro = carregar_registro(DIRETORIO_DO_REGISTRO)
+    assert registro.rejeicoes == []
+    por_id = {camera.id: camera for camera in registro.cameras}
+    assert id_da_camera in por_id, (
+        f"a câmera {id_da_camera} não está no registro versionado; "
+        f"ids encontrados: {sorted(por_id)}"
+    )
+    return por_id[id_da_camera]
+
+
+def test_AC_031_2_camera_000012_tem_id_nome_sentidos_distintos_e_linha_nao_degenerada():
+    """A 000012 chega completa. A parte de resolução fica em T-10 (D-3)."""
+    camera = _camera_do_registro("000012")
+
+    assert isinstance(camera.id, str)
+    assert camera.id == "000012"
+    assert camera.nome == "Praia x Mariz Barros"
+    assert camera.sentido_a.strip()
+    assert camera.sentido_b.strip()
+    assert camera.sentido_a != camera.sentido_b
+    assert (camera.linha.p1.x, camera.linha.p1.y) != (
+        camera.linha.p2.x,
+        camera.linha.p2.y,
+    )
+
+
+def test_AC_031_3_camera_000013_mantem_nome_sentidos_linha_e_previa():
+    """A 000013 segue idêntica a antes da feature; pega edição acidental."""
+    camera = _camera_do_registro("000013")
+
+    assert camera.nome == "Praça Getúlio Vargas"
+    assert camera.sentido_a == "Icaraí"
+    assert camera.sentido_b == "Centro"
+    assert (camera.linha.p1.x, camera.linha.p1.y) == (1053, 348)
+    assert (camera.linha.p2.x, camera.linha.p2.y) == (351, 445)
+    assert camera.preview == "000013-v3.png"

@@ -13,6 +13,9 @@ que o `AppTest` expõe `st.image` (o nome `"imgs"`, que a tarefa previa como
 alternativa, não existe aqui).
 """
 
+import sys
+from pathlib import Path
+
 import cv2
 import httpx
 import numpy as np
@@ -205,3 +208,81 @@ def test_AC_020_6_registro_sem_camera_valida_nao_mostra_cartao_e_trava_iniciar(
     assert botoes_de_cartao(at) == []
     assert any("Nenhuma câmera disponível" in w.value for w in at.warning)
     assert botao_iniciar(at).disabled is True
+
+
+# --- nova-camera: cartões com o registro versionado de verdade (T-06) ---
+
+REGISTRO_VERSIONADO = Path(__file__).resolve().parents[1] / "config" / "cameras"
+
+
+def aponta_para_o_registro_versionado(monkeypatch) -> None:
+    monkeypatch.setattr(
+        sys, "argv", ["app.py", "--config-dir", str(REGISTRO_VERSIONADO)]
+    )
+
+
+def test_AC_032_1_interface_mostra_os_cartoes_da_000012_e_da_000013_em_ordem(
+    monkeypatch, ambiente
+):
+    aponta_para_o_registro_versionado(monkeypatch)
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert cartoes(at) == [
+        ("000012", "Praia x Mariz Barros"),
+        ("000013", "Praça Getúlio Vargas"),
+    ]
+
+
+def test_AC_032_2_cartao_da_000012_mostra_a_previa_sem_tocar_a_rede(
+    monkeypatch, ambiente
+):
+    def proibido(self, *args, **kwargs):
+        raise AssertionError("a interface não pode acessar a rede para a prévia")
+
+    monkeypatch.setattr(httpx.Client, "send", proibido)
+    aponta_para_o_registro_versionado(monkeypatch)
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    # As duas câmeras têm prévia: duas imagens e nenhum "sem prévia".
+    assert len(at.get("image")) == 2
+    assert "sem prévia" not in textos(at)
+
+
+def test_AC_032_3_aba_nova_seleciona_a_000012(monkeypatch, ambiente):
+    aponta_para_o_registro_versionado(monkeypatch)
+
+    at = abre_a_interface()
+
+    assert at.session_state["camera"] == "000012"
+    rotulos = rotulos_dos_cartoes(at)
+    assert rotulos["camera_000012"] == "SELECIONADA"
+    assert rotulos["camera_000013"] != "SELECIONADA"
+
+
+def test_AC_032_4_iniciar_com_o_cartao_da_000012_dispara_a_sessao_da_000012(
+    monkeypatch, ambiente, disparo
+):
+    aponta_para_o_registro_versionado(monkeypatch)
+    at = abre_a_interface()
+
+    # A 000012 já vem selecionada: passa pela 000013 antes, para provar que o
+    # clique no cartão da 000012 é o que vale.
+    at.button(key="camera_000013").click()
+    at = at.run()
+    assert at.session_state["camera"] == "000013"
+    at.button(key="camera_000012").click()
+    at = at.run()
+    assert at.session_state["camera"] == "000012"
+
+    at.number_input[0].set_value(1)
+    at = at.run()
+    botao_iniciar(at).click()
+    at = at.run()
+
+    assert [(chamada[0], chamada[1]) for chamada in disparo.chamadas] == [
+        ("000012", 1)
+    ]

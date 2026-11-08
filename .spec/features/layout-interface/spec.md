@@ -92,6 +92,11 @@ Critérios de aceite:
 
   AC-020.4 — Dado uma aba recém-aberta, quando os cartões são exibidos, então a
   primeira câmera do registro aparece selecionada.
+  > **Alterado por:** feature `nova-camera`, em 2026-11-08.
+  > O critério continua valendo sem mudança de texto, mas a câmera selecionada
+  > numa aba recém-aberta passa a ser a 000012, que tem o menor id do registro,
+  > e não mais a 000013 (AC-032.3 e Q-025).
+  > Ver `.spec/features/nova-camera/spec.md`.
 
   AC-020.5 — Dado uma sessão em andamento ou um resultado exibido, quando a
   interface é consultada, então nenhum cartão pode ser acionado e a câmera

@@ -11,7 +11,8 @@ pela interface, os vídeos são apagados (AC-003.5).
 O protótipo `Contagem de Veiculos.html` muda isso em dois pontos:
 
 - no painel de Configuração, a seção "02 · Saída" tem a opção "Manter clipes de
-  vídeo", com o texto "A planilha .xlsx é sempre gerada.";
+  vídeo", com o texto "Salva os trechos processados para download ao final. A
+  planilha .xlsx é sempre gerada.";
 - no painel de resultados, quando a opção estava ligada, aparece a lista dos
   clipes da sessão, cada um com o seu botão de download, e um botão para baixar
   todos num `.zip`.
@@ -36,7 +37,8 @@ precisar do terminal.
 Critérios de aceite:
   AC-024.1 — Dado uma aba recém-aberta com a fonte "Câmera ao vivo", quando a
   interface é exibida, então a opção "Manter clipes de vídeo" aparece desligada,
-  com o texto "A planilha .xlsx é sempre gerada."
+  com o texto "Salva os trechos processados para download ao final. A
+  planilha .xlsx é sempre gerada."
 
   AC-024.2 — Dado a opção ligada ao iniciar, quando a sessão iniciada pela
   interface termina com o processamento concluído, então todos os clipes

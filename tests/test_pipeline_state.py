@@ -13,6 +13,7 @@ Nada aqui toca a rede nem grava fora de `tmp_path`.
 import json
 import os
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 import pytest
 
@@ -21,6 +22,7 @@ from auto_counter.pipeline import state
 from auto_counter.pipeline.state import (
     NOME_DO_ESTADO,
     AnotadorDoEstado,
+    ClipeMantido,
     Fase,
     ler_estado,
 )
@@ -456,3 +458,101 @@ def test_falha_ao_regravar_tm_nao_levanta(tmp_path, monkeypatch):
     a.minuto_processado()
 
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+# --- download-clipes: manter_videos e clipes no estado (T-01) ---
+
+
+@pytest.mark.parametrize("manter_videos", [True, False])
+def test_AC_024_3_iniciar_grava_a_escolha_de_manter_videos(tmp_path, manter_videos):
+    a = AnotadorDoEstado(
+        tmp_path,
+        pid=4242,
+        id_camera="000013",
+        nome_camera="Praça Renascença",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        manter_videos=manter_videos,
+    )
+
+    a.iniciar()
+
+    assert ler_estado(tmp_path).manter_videos is manter_videos
+    bruto = json.loads((tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8"))
+    assert bruto["manter_videos"] is manter_videos
+
+
+def test_AC_025_1_terminar_grava_os_clipes_em_ordem_com_last_modified_em_utc(tmp_path):
+    a = anotador_com_relogio(tmp_path, manter_videos=True)
+    a.iniciar()
+
+    clipes = (
+        ClipeMantido(
+            minuto=1,
+            caminho=tmp_path / "minuto-01.mp4",
+            last_modified=datetime(2026, 11, 8, 8, 0, tzinfo=timezone(timedelta(hours=-3))),
+            duracao_segundos=59,
+        ),
+        ClipeMantido(
+            minuto=2,
+            caminho=tmp_path / "minuto-02.mp4",
+            last_modified=datetime(2026, 11, 8, 11, 1, tzinfo=timezone.utc),
+            duracao_segundos=60,
+        ),
+    )
+    a.terminar(Fase.CONCLUIDA, status="COMPLETA", clipes=clipes)
+
+    estado = ler_estado(tmp_path)
+    assert estado.clipes == clipes
+    assert [c.minuto for c in estado.clipes] == [1, 2]
+    assert estado.clipes[0].last_modified == datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+
+    bruto = json.loads((tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8"))
+    assert bruto["clipes"][0]["last_modified"] == "2026-11-08T11:00:00+00:00"
+    assert bruto["clipes"][0]["duracao_segundos"] == 59
+    assert bruto["clipes"][1]["last_modified"] == "2026-11-08T11:01:00+00:00"
+
+
+def test_AC_025_1_clipe_sem_duracao_e_gravado_com_null(tmp_path):
+    a = anotador_com_relogio(tmp_path, manter_videos=True)
+    a.iniciar()
+
+    clipe = ClipeMantido(
+        minuto=1,
+        caminho=tmp_path / "minuto-01.mp4",
+        last_modified=INICIO,
+        duracao_segundos=None,
+    )
+    a.terminar(Fase.CONCLUIDA, status="COMPLETA", clipes=(clipe,))
+
+    assert ler_estado(tmp_path).clipes[0].duracao_segundos is None
+    bruto = json.loads((tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8"))
+    assert bruto["clipes"][0]["duracao_segundos"] is None
+
+
+def test_estado_de_versao_anterior_sem_manter_videos_nem_clipes_e_lido_sem_falhar(
+    tmp_path,
+):
+    a = anotador_com_relogio(tmp_path)
+    a.iniciar()
+    caminho = tmp_path / NOME_DO_ESTADO
+    dados = json.loads(caminho.read_text(encoding="utf-8"))
+    del dados["manter_videos"]
+    del dados["clipes"]
+    caminho.write_text(json.dumps(dados), encoding="utf-8")
+
+    estado = ler_estado(tmp_path)
+
+    assert estado is not None
+    assert estado.manter_videos is False
+    assert estado.clipes is None
+
+
+def test_last_modified_sem_fuso_e_recusado():
+    with pytest.raises(ValueError, match="fuso"):
+        ClipeMantido(
+            minuto=1,
+            caminho=Path("minuto-01.mp4"),
+            last_modified=datetime(2026, 11, 8, 8, 0),
+            duracao_segundos=None,
+        )

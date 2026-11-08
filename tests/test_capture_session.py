@@ -40,6 +40,7 @@ import numpy as np
 import pytest
 
 from auto_counter.cameras.model import Camera
+from auto_counter.cameras.registry import carregar_registro
 from auto_counter.cameras.url import VARIAVEL_BASE_URL
 from auto_counter.capture.manifest import NOME_DO_MANIFEST, ler
 from auto_counter.capture.session import (
@@ -633,3 +634,36 @@ def test_AC_012_1_o_gancho_e_chamado_depois_do_manifest_gravado(
     # Em cada chamada, o manifest em disco já traz o minuto que acabou de ser
     # resolvido.
     assert visto == [([1], []), ([1], [2]), ([1, 3], [2])]
+
+
+class ServidorFalsoQueGuardaUrl(ServidorFalso):
+    """O `ServidorFalso` que também guarda a URL de cada pedido (AC-032.4)."""
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.urls: list[str] = []
+
+    def _responder(self, pedido: httpx.Request) -> httpx.Response:
+        self.urls.append(str(pedido.url))
+        return super()._responder(pedido)
+
+
+def test_AC_032_4_captura_da_000012_pede_so_a_url_dela_e_nomeia_a_sessao_com_o_id(
+    tmp_path, clipes_legiveis
+):
+    diretorio = Path(__file__).resolve().parents[1] / "config" / "cameras"
+    camera_000012 = {c.id: c for c in carregar_registro(diretorio).cameras}[
+        "000012"
+    ]
+    relogio = RelogioFalso()
+    servidor = ServidorFalsoQueGuardaUrl(
+        relogio, [(0.0, "clipe-a")], clipes_legiveis("clipe-a")
+    )
+
+    resultado = executa(camera_000012, tmp_path, servidor, relogio, minutos=1)
+
+    assert servidor.urls, "a captura não fez nenhum pedido"
+    assert set(servidor.urls) == {f"{BASE_URL}/000012/last_video.mp4"}
+    assert not any("/000013/" in url for url in servidor.urls)
+    assert resultado.dir_sessao.parent == tmp_path / "data" / "sessions"
+    assert resultado.dir_sessao.name.startswith("000012-")

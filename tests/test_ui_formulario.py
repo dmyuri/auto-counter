@@ -60,8 +60,10 @@ class DisparoDuble:
         self.chamadas = []
         self.problema = problema
 
-    def iniciar(self, id_camera, minutos, *, data_dir, config_dir):
-        self.chamadas.append((id_camera, minutos, data_dir, config_dir))
+    def iniciar(self, id_camera, minutos, *, data_dir, config_dir, manter_videos=False):
+        self.chamadas.append(
+            (id_camera, minutos, data_dir, config_dir, manter_videos)
+        )
         return object()
 
     def aguardar(self, disparada, **opcoes):
@@ -207,7 +209,9 @@ def test_iniciar_dispara_com_a_camera_e_a_duracao_escolhidas(
     at = at.run()
 
     assert not at.exception
-    assert disparo.chamadas == [("000042", 7, tmp_path / "data", destino)]
+    assert disparo.chamadas == [
+        ("000042", 7, tmp_path / "data", destino, False)
+    ]
 
 
 def test_sessao_que_nao_inicia_mostra_o_motivo_sem_traceback(

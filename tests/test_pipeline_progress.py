@@ -18,6 +18,7 @@ import pytest
 
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.counting.config import Categoria
+from auto_counter.pipeline.clipes import formatar_megabytes, nomes_de_download
 from auto_counter.pipeline.lock import NOME_DA_TRAVA, adquirir_trava
 from auto_counter.pipeline.progress import (
     MENSAGEM_PROCESSO_MORREU,
@@ -27,7 +28,7 @@ from auto_counter.pipeline.progress import (
     formatar_tempo,
     ler_progresso,
 )
-from auto_counter.pipeline.state import AnotadorDoEstado, Fase
+from auto_counter.pipeline.state import AnotadorDoEstado, ClipeMantido, Fase
 from auto_counter.storage.connection import caminho_do_banco, conectar
 from tests.export_helpers import ID_SESSAO, evento, gravar_sessao
 from tests.test_pipeline_lock import grava_trava
@@ -959,3 +960,323 @@ def test_AC_018_4_processo_morto_nao_traz_participacoes_nem_taxa(tmp_path):
     assert resultado.quantidades is None
     assert resultado.participacoes is None
     assert resultado.taxa == "— veíc/min"
+
+
+# --- download-clipes: os clipes do resultado (T-06) ---
+
+
+def clipe(
+    tmp_path,
+    *,
+    minuto,
+    nome_arquivo,
+    tamanho_em_bytes,
+    last_modified,
+    duracao_segundos=None,
+    presente=True,
+) -> ClipeMantido:
+    caminho = tmp_path / nome_arquivo
+    if presente:
+        caminho.write_bytes(b"\x00" * tamanho_em_bytes)
+    return ClipeMantido(
+        minuto=minuto,
+        caminho=caminho,
+        last_modified=last_modified,
+        duracao_segundos=duracao_segundos,
+    )
+
+
+def anotador_com_opcao(tmp_path, *, manter_videos, pid=None) -> AnotadorDoEstado:
+    return AnotadorDoEstado(
+        tmp_path,
+        pid=os.getpid() if pid is None else pid,
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        manter_videos=manter_videos,
+    )
+
+
+def test_AC_025_1_concluida_com_a_opcao_lista_k_clipes_em_ordem_com_nome_duracao_e_tamanho(
+    tmp_path,
+):
+    lm1 = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    lm2 = datetime(2026, 11, 8, 11, 1, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path,
+        minuto=1,
+        nome_arquivo="minuto-01.mp4",
+        tamanho_em_bytes=1_000_000,
+        last_modified=lm1,
+        duracao_segundos=59,
+    )
+    c2 = clipe(
+        tmp_path,
+        minuto=2,
+        nome_arquivo="minuto-02.mp4",
+        tamanho_em_bytes=2_000_000,
+        last_modified=lm2,
+        duracao_segundos=60,
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1, c2))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.manter_clipes is True
+    assert [c.minuto for c in resultado.clipes] == [1, 2]
+    nomes = nomes_de_download("000013", [lm1, lm2])
+    assert resultado.clipes[0].nome == nomes[0]
+    assert resultado.clipes[0].duracao == formatar_tempo(59)
+    assert resultado.clipes[0].tamanho_em_bytes == 1_000_000
+    assert resultado.clipes[0].tamanho == formatar_megabytes(1_000_000)
+    assert resultado.clipes_ausentes == 0
+
+
+def test_AC_025_1_titulo_soma_os_tamanhos_dos_clipes_listados(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    clipes = [
+        clipe(
+            tmp_path,
+            minuto=m,
+            nome_arquivo=f"minuto-0{m}.mp4",
+            tamanho_em_bytes=tamanho,
+            last_modified=lm + timedelta(minutes=m),
+        )
+        for m, tamanho in zip((1, 2, 3), (1_000_000, 2_000_000, 1_500_000))
+    ]
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    for item in clipes:
+        a.minuto_da_captura(item.minuto, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=tuple(clipes))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.titulo_dos_clipes == "Clipes · 3 arquivos · 4,5 MB"
+
+
+def test_AC_025_1_duracao_desconhecida_vira_traco(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path,
+        minuto=1,
+        nome_arquivo="minuto-01.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm,
+        duracao_segundos=None,
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1,))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.clipes[0].duracao == "—"
+
+
+def test_AC_025_2_minuto_perdido_nao_aparece(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path, minuto=1, nome_arquivo="minuto-01.mp4", tamanho_em_bytes=1000, last_modified=lm
+    )
+    c2 = clipe(
+        tmp_path,
+        minuto=4,
+        nome_arquivo="minuto-04.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm + timedelta(minutes=3),
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, False)
+    a.minuto_da_captura(4, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1, c2))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert [c.minuto for c in resultado.clipes] == [1, 4]
+
+
+def test_AC_025_3_nomes_seguem_sup_077_com_sufixo_no_mesmo_minuto(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path, minuto=1, nome_arquivo="minuto-01.mp4", tamanho_em_bytes=1000, last_modified=lm
+    )
+    c2 = clipe(
+        tmp_path,
+        minuto=2,
+        nome_arquivo="minuto-02.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm + timedelta(seconds=10),
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1, c2))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.clipes[0].nome.endswith("_0800.mp4")
+    assert resultado.clipes[1].nome.endswith("_0800_2.mp4")
+
+
+def test_AC_025_5_clipes_ausentes_sao_contados_e_nao_listados(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path, minuto=1, nome_arquivo="minuto-01.mp4", tamanho_em_bytes=1000, last_modified=lm
+    )
+    c2 = clipe(
+        tmp_path,
+        minuto=2,
+        nome_arquivo="minuto-02.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm + timedelta(minutes=1),
+        presente=False,
+    )
+    c3 = clipe(
+        tmp_path,
+        minuto=3,
+        nome_arquivo="minuto-03.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm + timedelta(minutes=2),
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    for m in (1, 2, 3):
+        a.minuto_da_captura(m, True)
+    a.terminar(
+        Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1, c2, c3)
+    )
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert [c.minuto for c in resultado.clipes] == [1, 3]
+    assert resultado.clipes_ausentes == 1
+    assert resultado.titulo_dos_clipes == "Clipes · 2 arquivos · 0,0 MB"
+
+
+def test_AC_025_5_nome_nao_muda_quando_outro_clipe_some(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path,
+        minuto=1,
+        nome_arquivo="minuto-01.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm,
+        presente=False,
+    )
+    c2 = clipe(
+        tmp_path,
+        minuto=2,
+        nome_arquivo="minuto-02.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm + timedelta(seconds=10),
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1, c2))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert len(resultado.clipes) == 1
+    assert resultado.clipes[0].nome.endswith("_0800_2.mp4")
+
+
+def test_AC_025_5_todos_ausentes_da_lista_vazia_e_titulo_none(tmp_path):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path,
+        minuto=1,
+        nome_arquivo="minuto-01.mp4",
+        tamanho_em_bytes=1000,
+        last_modified=lm,
+        presente=False,
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1,))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.clipes == ()
+    assert resultado.clipes_ausentes == 1
+    assert resultado.titulo_dos_clipes is None
+
+
+def test_AC_024_3_concluida_sem_a_opcao_traz_manter_clipes_false_e_lista_vazia(tmp_path):
+    a = anotador_com_opcao(tmp_path, manter_videos=False)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=None)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.manter_clipes is False
+    assert resultado.clipes == ()
+    assert resultado.clipes_ausentes == 0
+    assert resultado.titulo_dos_clipes is None
+
+
+@pytest.mark.parametrize(
+    "fase", [Fase.PROCESSAMENTO_CANCELADO, Fase.SEM_PLANILHA, Fase.FALHOU]
+)
+def test_AC_025_6_cancelada_sem_planilha_e_falhou_nao_trazem_clipes(tmp_path, fase):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path, minuto=1, nome_arquivo="minuto-01.mp4", tamanho_em_bytes=1000, last_modified=lm
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    # `terminar` só grava `clipes` quando quem chama passa; os outros
+    # desfechos nunca passam (T-04), e é isso que esta leitura confere.
+    a.terminar(fase, id_sessao=ID_SESSAO, status="COMPLETA", mensagem="x")
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.clipes == ()
+    assert resultado.clipes_ausentes == 0
+    assert resultado.titulo_dos_clipes is None
+
+
+def test_AC_025_6_processo_morto_nao_traz_clipes(tmp_path):
+    pid, _ = pid_morto()
+    a = anotador_com_opcao(tmp_path, manter_videos=True, pid=pid)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.FALHOU
+    assert resultado.clipes == ()
+    assert resultado.clipes_ausentes == 0
+    assert resultado.titulo_dos_clipes is None
+
+
+def test_ler_progresso_nao_abre_o_manifest_ao_listar_clipes(tmp_path, monkeypatch):
+    lm = datetime(2026, 11, 8, 11, 0, tzinfo=timezone.utc)
+    c1 = clipe(
+        tmp_path, minuto=1, nome_arquivo="minuto-01.mp4", tamanho_em_bytes=1000, last_modified=lm
+    )
+    a = anotador_com_opcao(tmp_path, manter_videos=True)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA", clipes=(c1,))
+    # O manifest é um diretório de mesmo nome: qualquer tentativa de abri-lo
+    # como arquivo levanta, em vez de silenciosamente não achar nada.
+    (tmp_path / "manifest.json").mkdir()
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert [c.minuto for c in resultado.clipes] == [1]

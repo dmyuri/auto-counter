@@ -23,6 +23,14 @@ todos calculados aqui com inteiros (D-1), para a interface só exibir (SUP-038).
 O resultado também traz a chave que o identifica (D-7), o número de registros
 gravados e a marca de encerramento pelo usuário (D-8), lidos do banco em modo
 somente leitura (AC-023.2, AC-023.6, AC-023.7).
+
+Por `download-clipes` (D-4), só no desfecho `CONCLUIDA` com `manter_videos`,
+o resultado também traz a lista dos clipes presentes em disco agora (nome de
+SUP-077, duração e tamanho), quantos dos gravados no estado já não estão lá
+(AC-025.5) e o título pronto (D-5). Os nomes são calculados sobre **todos**
+os clipes do estado, antes de filtrar os ausentes (D-3), para que um clipe
+não mude de nome porque outro sumiu. A presença e o tamanho são lidos agora,
+no disco; nada é gravado, e o `manifest.json` não é aberto.
 """
 
 import sqlite3
@@ -33,12 +41,13 @@ from pathlib import Path
 
 from auto_counter.counting.config import Categoria
 from auto_counter.export.format import linha_de_aviso
+from auto_counter.pipeline.clipes import formatar_megabytes, nomes_de_download
 from auto_counter.pipeline.lock import (
     InfoDaTrava,
     ler_trava,
     mensagem_de_sessao_em_andamento,
 )
-from auto_counter.pipeline.state import EstadoDaSessao, Fase, ler_estado
+from auto_counter.pipeline.state import ClipeMantido, EstadoDaSessao, Fase, ler_estado
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.model import SessaoGravada
@@ -188,6 +197,67 @@ class Andamento:
 
 
 @dataclass(frozen=True)
+class ClipeParaBaixar:
+    """Um clipe mantido, presente em disco agora, pronto para exibir (D-4)."""
+
+    minuto: int
+    caminho: Path
+    nome: str
+    """Nome de download de SUP-077 (D-3)."""
+    duracao: str
+    """`formatar_tempo` do segundo medido, ou `"—"` sem medição (D-2)."""
+    tamanho_em_bytes: int
+    tamanho: str
+    """`formatar_megabytes` do tamanho (D-5)."""
+
+
+def _clipes_para_baixar(
+    estado: EstadoDaSessao,
+) -> tuple[tuple[ClipeParaBaixar, ...], int, str | None]:
+    """Os clipes presentes, quantos ausentes e o título (D-3, D-4, D-5).
+
+    Os nomes são calculados sobre todos os clipes do estado, em ordem de
+    minuto, antes de filtrar os ausentes — um clipe não muda de nome porque
+    outro sumiu (D-3).
+    """
+    if not estado.manter_videos or not estado.clipes:
+        return (), 0, None
+
+    nomes = nomes_de_download(
+        estado.id_camera, [clipe.last_modified for clipe in estado.clipes]
+    )
+    presentes: list[ClipeParaBaixar] = []
+    ausentes = 0
+    soma_bytes = 0
+    for clipe, nome in zip(estado.clipes, nomes):
+        if not clipe.caminho.is_file():
+            ausentes += 1
+            continue
+        tamanho_em_bytes = clipe.caminho.stat().st_size
+        soma_bytes += tamanho_em_bytes
+        presentes.append(
+            ClipeParaBaixar(
+                minuto=clipe.minuto,
+                caminho=clipe.caminho,
+                nome=nome,
+                duracao=(
+                    "—"
+                    if clipe.duracao_segundos is None
+                    else formatar_tempo(clipe.duracao_segundos)
+                ),
+                tamanho_em_bytes=tamanho_em_bytes,
+                tamanho=formatar_megabytes(tamanho_em_bytes),
+            )
+        )
+    titulo = (
+        None
+        if not presentes
+        else f"Clipes · {len(presentes)} arquivos · {formatar_megabytes(soma_bytes)}"
+    )
+    return tuple(presentes), ausentes, titulo
+
+
+@dataclass(frozen=True)
 class Resultado:
     """O desfecho da última sessão."""
 
@@ -215,6 +285,14 @@ class Resultado:
     """Só na sessão concluída: é o que o painel ao vivo mostra no fim (AC-018.1)."""
     taxa: str = TAXA_SEM_DADO
     """Só na sessão concluída; nos demais desfechos, o traço (AC-018.3, AC-018.4)."""
+    manter_clipes: bool = False
+    """A escolha feita ao iniciar (`estado.manter_videos`), SUP-080."""
+    clipes: tuple[ClipeParaBaixar, ...] = ()
+    """Só na sessão concluída com a opção e ao menos um clipe presente."""
+    clipes_ausentes: int = 0
+    """Clipes gravados no estado que já não estão em disco (AC-025.5)."""
+    titulo_dos_clipes: str | None = None
+    """`"Clipes · k arquivos · X MB"` (D-5), ou `None` sem clipe presente."""
 
 
 @dataclass(frozen=True)
@@ -360,6 +438,7 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
     if planilha is not None and not planilha.is_file():
         mensagem = f"a planilha não está mais em {planilha}"
         planilha = None
+    clipes, clipes_ausentes, titulo_dos_clipes = _clipes_para_baixar(estado)
     return Resultado(
         fase=Fase.CONCLUIDA,
         status=status,
@@ -379,6 +458,10 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         taxa=formatar_taxa(
             estado.veiculos_nos_minutos_com_dado, estado.minutos_com_dado
         ),
+        manter_clipes=estado.manter_videos,
+        clipes=clipes,
+        clipes_ausentes=clipes_ausentes,
+        titulo_dos_clipes=titulo_dos_clipes,
     )
 
 

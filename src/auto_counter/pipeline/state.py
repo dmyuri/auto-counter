@@ -26,6 +26,13 @@ em que o minuto em análise começou a ser processado (`minuto_em_analise_desde`
 e, para a taxa, quantos minutos já concluíram com dado (`minutos_com_dado`) e os
 veículos aceitos nesses minutos (`veiculos_nos_minutos_com_dado`). Arquivo de
 versão anterior não tem os três campos e é lido com `None`, 0 e 0.
+
+Por `download-clipes` (SUP-080), o arquivo também carrega a escolha de manter
+os vídeos feita ao iniciar (`manter_videos`) e, só no desfecho `CONCLUIDA` com
+essa escolha ligada, a lista dos clipes capturados (`clipes`). Quem conhece os
+clipes é o processo da sessão, não a interface: é por isso que eles entram
+aqui, em vez de a tela abrir o `manifest.json` (D-9). Arquivo de versão
+anterior não tem os dois campos e é lido com `False` e `None`.
 """
 
 import json
@@ -98,6 +105,23 @@ class EstadoDaSessao:
     """k (SUP-069): minutos já concluídos com dado, sem os descartados."""
     veiculos_nos_minutos_com_dado: int = 0
     """V (SUP-069): veículos aceitos nesses k minutos."""
+    manter_videos: bool = False
+    """A escolha feita ao iniciar (SUP-080, D-1)."""
+    clipes: "tuple[ClipeMantido, ...] | None" = None
+    """Só no desfecho `CONCLUIDA` com `manter_videos` (D-1); `None` até lá."""
+
+
+@dataclass(frozen=True)
+class ClipeMantido:
+    """Um clipe capturado, gravado no desfecho `CONCLUIDA` (download-clipes, D-1)."""
+
+    minuto: int
+    caminho: Path
+    last_modified: datetime
+    duracao_segundos: int | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "last_modified", _em_utc(self.last_modified))
 
 
 def _em_utc(instante: datetime) -> datetime:
@@ -151,6 +175,20 @@ def _como_dicionario(estado: EstadoDaSessao) -> dict:
         ),
         "minutos_com_dado": estado.minutos_com_dado,
         "veiculos_nos_minutos_com_dado": estado.veiculos_nos_minutos_com_dado,
+        "manter_videos": estado.manter_videos,
+        "clipes": (
+            None
+            if estado.clipes is None
+            else [
+                {
+                    "minuto": clipe.minuto,
+                    "caminho": str(clipe.caminho),
+                    "last_modified": clipe.last_modified.isoformat(),
+                    "duracao_segundos": clipe.duracao_segundos,
+                }
+                for clipe in estado.clipes
+            ]
+        ),
     }
 
 
@@ -158,6 +196,24 @@ def _ler_quantidades(bruto) -> dict[str, int] | None:
     if bruto is None:
         return None
     return {categoria.value: int(bruto[categoria.value]) for categoria in Categoria}
+
+
+def _ler_clipes(bruto) -> "tuple[ClipeMantido, ...] | None":
+    if bruto is None:
+        return None
+    return tuple(
+        ClipeMantido(
+            minuto=int(item["minuto"]),
+            caminho=Path(item["caminho"]),
+            last_modified=datetime.fromisoformat(item["last_modified"]),
+            duracao_segundos=(
+                None
+                if item["duracao_segundos"] is None
+                else int(item["duracao_segundos"])
+            ),
+        )
+        for item in bruto
+    )
 
 
 def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
@@ -200,6 +256,10 @@ def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
             veiculos_nos_minutos_com_dado=int(
                 dados.get("veiculos_nos_minutos_com_dado", 0)
             ),
+            # Arquivo de versão anterior não tem os dois campos abaixo
+            # (download-clipes, SUP-080): valem `False` e `None`.
+            manter_videos=bool(dados.get("manter_videos", False)),
+            clipes=_ler_clipes(dados.get("clipes")),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -222,6 +282,7 @@ class AnotadorDoEstado:
         duracao_pedida: int,
         iniciada_em: datetime,
         agora: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
+        manter_videos: bool = False,
     ) -> None:
         self._data_dir = Path(data_dir)
         self._agora = agora
@@ -237,6 +298,7 @@ class AnotadorDoEstado:
             duracao_pedida=duracao_pedida,
             iniciada_em=_em_utc(iniciada_em),
             fase=Fase.CAPTURA,
+            manter_videos=manter_videos,
         )
 
     @property
@@ -326,8 +388,13 @@ class AnotadorDoEstado:
         status: str | None = None,
         planilha: str | None = None,
         mensagem: str | None = None,
+        clipes: "tuple[ClipeMantido, ...] | None" = None,
     ) -> None:
-        """Grava o desfecho. O arquivo fica depois do fim da sessão."""
+        """Grava o desfecho. O arquivo fica depois do fim da sessão.
+
+        Quem decide se há clipes é quem chama (`executar_sessao`, T-04); este
+        método só grava o que recebe.
+        """
         if not fase.terminal:
             raise ValueError(f"{fase.value} não é uma fase terminal")
         self._estado = replace(
@@ -338,6 +405,7 @@ class AnotadorDoEstado:
             planilha=planilha,
             mensagem=mensagem,
             terminada_em=_em_utc(self._agora()),
+            clipes=clipes,
         )
         if not self._gravar():
             print(

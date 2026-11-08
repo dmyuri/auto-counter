@@ -267,3 +267,21 @@ def test_AC_002_2_camera_preview_com_linha_fora_do_frame_nao_gera_png(
     assert "320" in resultado.output and "240" in resultado.output
     assert not destino.exists(), "linha fora do frame não pode gerar PNG"
     assert "Traceback" not in resultado.output
+
+
+def test_AC_031_5_camera_list_mostra_000012_e_000013_com_os_nomes(runner):
+    """O registro versionado de verdade lista as duas câmeras, cada uma na sua linha."""
+    diretorio = Path(__file__).resolve().parents[1] / "config" / "cameras"
+
+    resultado = runner.invoke(
+        app, ["camera", "list", "--config-dir", str(diretorio)]
+    )
+
+    assert resultado.exit_code == 0, resultado.output
+    linhas = resultado.output.splitlines()
+    linha_000012 = [l for l in linhas if "000012" in l]
+    linha_000013 = [l for l in linhas if "000013" in l]
+    assert len(linha_000012) == 1, resultado.output
+    assert len(linha_000013) == 1, resultado.output
+    assert "Praia x Mariz Barros" in linha_000012[0]
+    assert "Praça Getúlio Vargas" in linha_000013[0]

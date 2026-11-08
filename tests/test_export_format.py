@@ -6,16 +6,21 @@ SUP-032 e SUP-033. Funções puras: nenhum teste toca banco ou disco.
 
 from dataclasses import replace
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 
+from auto_counter.cameras.registry import carregar_registro
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.export.format import (
     linha_de_aviso,
     nome_do_arquivo,
     para_brasilia,
 )
+from auto_counter.storage.connection import conectar
 from auto_counter.storage.model import SessaoGravada
+from auto_counter.storage.sessions import ler_sessao
+from tests.export_helpers import gravar_sessao
 
 INICIO_UTC = datetime(2026, 9, 7, 11, 0, 5, tzinfo=timezone.utc)
 
@@ -124,3 +129,25 @@ def test_para_brasilia_devolve_datetime_sem_tzinfo_para_o_excel():
 
     assert resultado.tzinfo is None
     assert resultado == datetime(2026, 9, 7, 8, 0, 5)
+
+
+def test_AC_032_6_planilha_da_000012_tem_o_nome_com_o_id_dela(tmp_path):
+    """Sessão COMPLETA da 000012 gravada no banco: nome sem sufixo de status."""
+    diretorio = Path(__file__).resolve().parents[1] / "config" / "cameras"
+    camera = {c.id: c for c in carregar_registro(diretorio).cameras}["000012"]
+    id_sessao = "000012-20260907T110000Z"
+
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(
+            conexao,
+            id_sessao=id_sessao,
+            id_camera=camera.id,
+            nome_camera=camera.nome,
+            sentido_a=camera.sentido_a,
+            sentido_b=camera.sentido_b,
+            status=StatusDaSessao.COMPLETA,
+        )
+        sessao = ler_sessao(conexao, id_sessao)
+
+    # Início em 11:00:05 UTC, que em Brasília são 08:00; duração pedida de 2 min.
+    assert nome_do_arquivo(sessao) == "000012_20260907_0800_2min.xlsx"

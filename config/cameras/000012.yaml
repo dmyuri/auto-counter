@@ -1,0 +1,28 @@
+# Camera 000012 - Praia x Mariz Barros, alternativa a 000013.
+#
+# Calibrada em T-02 contra o PNG de preview (AC-002.1): a linha cruza o asfalto
+# das duas maos, da calcada da esquerda ate a calcada da direita, e cobre as
+# duas faixas de sentido.
+# A normal de p1 -> p2 aponta para baixo no quadro (SUP-003), entao sentido_a
+# rotula quem se aproxima da camera (cruza a linha de cima para baixo) e
+# sentido_b quem se afasta (cruza de baixo para cima). Os destinos sao os
+# mesmos da 000013: quem se aproxima vai para Icarai e quem se afasta vai para
+# o Centro (confirmado pelo autor).
+# Trocar p1 por p2 inverte os dois sentidos: a ordem dos pontos importa.
+# Resolucao do frame medida no video real: 1920x1080 (para T-10).
+#
+# O id fica entre aspas para preservar os zeros a esquerda (SUP-001): sem
+# aspas o YAML leria 000012 como numero.
+# Nenhuma URL aqui: ela e derivada do id (AC-001.4) sobre a base URL que vem
+# de AUTO_COUNTER_BASE_URL.
+# Coordenadas em pixels absolutos do frame nativo 1920x1080 (SUP-002).
+id: "000012"
+nome: "Praia x Mariz Barros"
+sentido_a: "Icaraí"
+sentido_b: "Centro"
+linha:
+  p1: {x: 95, y: 452}
+  p2: {x: 792, y: 400}
+# Imagem fixa exibida no cartao da interface (SUP-066 de layout-interface),
+# relativa a este diretorio. Opcional: sem ela, o cartao mostra "sem previa".
+preview: "000012-v1.png"

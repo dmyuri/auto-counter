@@ -17,6 +17,12 @@ A câmera do MVP é a **000013**, medida diretamente na fonte: responde com HTTP
 entrega; o mecanismo de lista existe para que outras sejam acrescentadas depois
 sem alteração de código.
 
+> **Alterado por:** feature `nova-camera`, em 2026-11-08.
+> A 000013 deixa de ser a única câmera calibrada: a 000012 (Praia x Mariz
+> Barros) entra no registro pelo mesmo mecanismo, sem alteração de código
+> (AC-031.1).
+> Ver `.spec/features/nova-camera/spec.md`.
+
 Esta é a feature base: nenhuma sessão de captura ou contagem pode começar sem
 uma câmera válida vinda daqui.
 

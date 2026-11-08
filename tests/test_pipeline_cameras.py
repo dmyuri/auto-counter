@@ -99,3 +99,18 @@ def test_AC_020_2_leitura_da_previa_nao_toca_a_rede(tmp_path, monkeypatch):
 
     assert previa_da_camera(camera_com("x.png"), tmp_path) is not None
     assert previa_da_camera(camera_com("nao_existe.png"), tmp_path) is None
+
+
+def test_AC_032_2_previa_da_000012_do_registro_versionado_abre(monkeypatch):
+    def proibido(self, *args, **kwargs):
+        raise AssertionError("a leitura da prévia não pode acessar a rede")
+
+    monkeypatch.setattr(httpx.Client, "send", proibido)
+    diretorio = RAIZ / "config" / "cameras"
+    registro = carregar_registro(diretorio)
+    camera = {c.id: c for c in registro.cameras}["000012"]
+
+    previa = previa_da_camera(camera, diretorio)
+
+    assert previa is not None
+    assert previa == (diretorio / camera.preview).read_bytes()
