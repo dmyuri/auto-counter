@@ -1097,7 +1097,7 @@ def _duracao_e_saida(travada: bool) -> None:
             args=(atalho,),
         )
 
-    st.markdown('<span class="rotulo">Saída</span>', unsafe_allow_html=True)
+    st.markdown('<span class="rotulo">02 · Saída</span>', unsafe_allow_html=True)
     st.session_state.setdefault(CHAVE_MANTER_CLIPES, False)
     with st.container(key="manter_clipes_cartao"):
         texto, controle = st.columns([5, 1], vertical_alignment="center")

@@ -76,7 +76,7 @@ def test_AC_026_2_upload_esconde_duracao_atalhos_e_manter_clipes(
     assert not [c for c in at.checkbox if c.label == "Manter clipes de vídeo"]
     texto = rotulos_de_markdown(at)
     assert "Duração" not in texto
-    assert "Saída" not in texto
+    assert "02 · Saída" not in texto
     assert "Manter clipes de vídeo" not in texto
     assert not [b for b in at.button if b.label == "Iniciar sessão"]
 
