@@ -6,6 +6,12 @@ Esta feature é o gate da entrega. Pela `CLAUDE.md`, nenhuma afirmação de que 
 sistema "conta bem" vale: quem declara a contagem pronta é o resultado desta
 validação contra vídeo de referência contado à mão.
 
+> **Alterado por:** feature `nova-camera`, em 2026-11-08.
+> A câmera 000012 passa a ser oferecida na interface sem passar por esta
+> validação e sem aviso, por decisão registrada em Q-024, então a contagem
+> dela não tem gate de acurácia.
+> Ver `.spec/features/nova-camera/spec.md`.
+
 A meta é dupla e foi fixada antes de qualquer medição, para que o número não
 seja escrito depois para caber no resultado:
 
@@ -72,6 +78,11 @@ Critérios de aceite:
 
 - Validar acurácia em câmera diferente da 000013: o MVP tem uma câmera calibrada
   e a meta é medida nela.
+  > **Alterado por:** feature `nova-camera`, em 2026-11-08.
+  > O item continua fora de escopo, mas por decisão (Q-024), já que o MVP
+  > passa a ter duas câmeras calibradas, 000013 e 000012, e só a 000013 é
+  > validada.
+  > Ver `.spec/features/nova-camera/spec.md`.
 - Métricas de detecção por frame (mAP, IoU) e avaliação do modelo isoladamente:
   o que se mede aqui é a contagem entregue ao usuário.
 - Ajuste automático de parâmetros para atingir a meta.
