@@ -47,6 +47,15 @@ só com os clipes presentes em disco e o aviso dos ausentes (AC-025.5), nada dis
 quando a sessão foi cancelada, ficou sem planilha ou falhou (AC-025.6), e a
 mensagem de AC-024.3 quando os clipes não foram mantidos. Nome, tamanho, presença
 e `.zip` vêm do `pipeline` (SUP-038).
+
+E, por `upload-videos`, o painel de Configuração tem a escolha da fonte, "Câmera
+ao vivo" (padrão) ou "Fazer upload de vídeos" (AC-026.1). Com o upload, a
+duração, os atalhos e a opção de manter clipes não aparecem (AC-026.2, AC-024.5)
+e voltam com o valor de antes (R-4); os cartões continuam, aparecem o aviso da
+câmera e a área de envio, e "Iniciar sessão" não é desenhado. Na fonte ao vivo
+nada muda, e a lista de envio nunca entra na sessão (AC-026.4). Com sessão em
+andamento ou resultado na tela, a fonte e a área de envio ficam travadas
+(AC-026.5).
 """
 
 import argparse
@@ -69,6 +78,7 @@ from auto_counter.pipeline.cameras import (
     previa_da_camera,
 )
 from auto_counter.pipeline.clipes import montar_zip
+from auto_counter.pipeline.lista_envio import aviso_da_camera
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
     TAXA_SEM_DADO,
@@ -103,6 +113,15 @@ CHAVE_CAMERA = "camera"
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
 # A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074).
 CHAVE_MANTER_CLIPES = "manter_clipes"
+CHAVE_FONTE = "fonte"
+FONTE_CAMERA = "camera"
+FONTE_UPLOAD = "upload"
+ROTULO_DA_FONTE = {FONTE_CAMERA: "Câmera ao vivo", FONTE_UPLOAD: "Fazer upload de vídeos"}
+SUBTITULO_DA_FONTE = {
+    FONTE_CAMERA: "Acessa o feed e processa em tempo real",
+    FONTE_UPLOAD: "Processa arquivos enviados manualmente",
+}
+CHAVE_ENVIO_GERACAO = "envio_geracao"
 # A opção "Manter clipes de vídeo" (AC-024.1, D-8 de `download-clipes`).
 CHAVE_CLIPES_BAIXADOS = "clipes_baixados"
 # Conjunto de `f"{chave}:{minuto}"` dos clipes cujo botão foi acionado (D-7).
@@ -165,6 +184,36 @@ CSS_DOS_COMPONENTES = """
 }
 .rotulo--acento { color: var(--accent); letter-spacing: 0; text-transform: none; }
 .linha-rotulo { display: flex; justify-content: space-between; align-items: baseline; }
+
+/* seletor de fonte: dois blocos lado a lado, o marcado em destaque */
+.st-key-fonte, .st-key-fonte [data-testid="stRadio"] { width: 100%; }
+.st-key-fonte [data-testid="stWidgetLabel"] { display: none; }
+.st-key-fonte [data-testid="stRadioGroup"] {
+  display: flex; flex-direction: row; align-items: stretch; gap: 0; width: 100%;
+  border: 1px solid var(--line);
+}
+.st-key-fonte [data-testid="stRadioGroup"] > div {
+  flex: 1 1 0; display: flex; align-items: stretch; margin: 0;
+}
+.st-key-fonte [data-testid="stRadioOption"] {
+  flex: 1; margin: 0; padding: 12px 14px; width: 100%; align-items: flex-start;
+  background: var(--panel); cursor: pointer;
+}
+.st-key-fonte [data-testid="stRadioOption"] > div { align-items: flex-start; }
+.st-key-fonte [data-testid="stRadioOption"] > div > div:first-child { display: none; }
+.st-key-fonte [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p {
+  margin: 0; font-size: 13px; line-height: 1.35; color: var(--muted);
+}
+.st-key-fonte [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p:first-child {
+  font-size: 15px; color: var(--ink);
+}
+.st-key-fonte [data-testid="stRadioOption"] strong {
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--ink);
+}
+.st-key-fonte [data-testid="stRadioOption"]:has(input:checked) { background: var(--accent); }
+.st-key-fonte [data-testid="stRadioOption"]:has(input:checked) p,
+.st-key-fonte [data-testid="stRadioOption"]:has(input:checked) strong { color: var(--accentInk); }
+.st-key-fonte [data-testid="stRadioOption"]:has(input:disabled) { opacity: .55; cursor: not-allowed; }
 
 /* header */
 .st-key-cabecalho {
@@ -1011,39 +1060,13 @@ def _cartao(camera, config_dir: Path, id_selecionada: str, travada: bool) -> Non
         )
 
 
-def _configuracao(
-    config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
-) -> None:
-    """Painel de Configuração: câmera, duração e o botão principal (D-18)."""
-    disponiveis = cameras_disponiveis(config_dir)
-    travada = tela.configuracao_travada
-    st.markdown('<span class="rotulo">Configuração</span>', unsafe_allow_html=True)
-    st.markdown('<span class="rotulo">Câmera</span>', unsafe_allow_html=True)
+def _rotulo_da_fonte(fonte: str) -> str:
+    """Título em negrito e subtítulo abaixo, como no protótipo."""
+    return f"**{ROTULO_DA_FONTE[fonte]}**\n\n{SUBTITULO_DA_FONTE[fonte]}"
 
-    if tela.sessao_em_andamento:
-        st.info(progresso.mensagem_de_recusa)
 
-    id_escolhida = None
-    if disponiveis.cameras:
-        ids = [camera.id for camera in disponiveis.cameras]
-        # Sem escolha, ou com um id que sumiu do registro, vale a primeira (D-13).
-        if st.session_state.get(CHAVE_CAMERA) not in ids:
-            st.session_state[CHAVE_CAMERA] = ids[0]
-        id_escolhida = st.session_state[CHAVE_CAMERA]
-        # Cartões e duração travados continuam desenhados (D-11): o Streamlit
-        # descarta o estado de widget que não é desenhado, e é ele que devolve a
-        # duração anterior depois de "Nova sessão" (AC-023.6).
-        # Três cartões por linha, na ordem do registro (SUP-065).
-        cameras = disponiveis.cameras
-        for inicio in range(0, len(cameras), 3):
-            for coluna, camera in zip(st.columns(3), cameras[inicio : inicio + 3]):
-                with coluna:
-                    _cartao(camera, config_dir, id_escolhida, travada)
-    else:
-        st.warning("Nenhuma câmera disponível.")
-        if disponiveis.motivo:
-            st.caption(disponiveis.motivo)
-
+def _duracao_e_saida(travada: bool) -> None:
+    """Duração, atalhos e a opção de manter clipes: só na fonte ao vivo."""
     st.markdown(
         '<div class="linha-rotulo"><span class="rotulo">Duração</span>'
         f'<span class="rotulo rotulo--acento">máximo {DURACAO_MAXIMA} min</span></div>',
@@ -1092,6 +1115,86 @@ def _configuracao(
                 label_visibility="collapsed",
             )
 
+
+def _camera_por_id(cameras, id_camera: str | None):
+    return next((c for c in cameras if c.id == id_camera), None)
+
+
+def _area_de_envio(camera, travada: bool) -> None:
+    """Aviso da câmera e área de envio da fonte de upload (AC-026.2, D-12).
+
+    O que chega no `file_uploader` é tratado na T-07; aqui só é desenhado,
+    sem `type=`, para a recusa por extensão ser a mensagem do app (D-3).
+    """
+    if camera is not None:
+        st.info(aviso_da_camera(camera))
+    st.session_state.setdefault(CHAVE_ENVIO_GERACAO, 0)
+    st.file_uploader(
+        "Vídeos",
+        accept_multiple_files=True,
+        key=f"envio_{st.session_state[CHAVE_ENVIO_GERACAO]}",
+        disabled=travada,
+        label_visibility="collapsed",
+    )
+
+
+def _configuracao(
+    config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
+) -> None:
+    """Painel de Configuração: câmera, duração e o botão principal (D-18)."""
+    disponiveis = cameras_disponiveis(config_dir)
+    travada = tela.configuracao_travada
+    st.markdown('<span class="rotulo">Configuração</span>', unsafe_allow_html=True)
+    st.markdown('<span class="rotulo">01 · Fonte</span>', unsafe_allow_html=True)
+    st.session_state.setdefault(CHAVE_FONTE, FONTE_CAMERA)
+    st.radio(
+        "Fonte",
+        [FONTE_CAMERA, FONTE_UPLOAD],
+        format_func=_rotulo_da_fonte,
+        horizontal=True,
+        key=CHAVE_FONTE,
+        disabled=travada,
+        label_visibility="collapsed",
+    )
+    st.markdown('<span class="rotulo">Câmera</span>', unsafe_allow_html=True)
+
+    if tela.sessao_em_andamento:
+        st.info(progresso.mensagem_de_recusa)
+
+    id_escolhida = None
+    if disponiveis.cameras:
+        ids = [camera.id for camera in disponiveis.cameras]
+        # Sem escolha, ou com um id que sumiu do registro, vale a primeira (D-13).
+        if st.session_state.get(CHAVE_CAMERA) not in ids:
+            st.session_state[CHAVE_CAMERA] = ids[0]
+        id_escolhida = st.session_state[CHAVE_CAMERA]
+        # Cartões e duração travados continuam desenhados (D-11): o Streamlit
+        # descarta o estado de widget que não é desenhado, e é ele que devolve a
+        # duração anterior depois de "Nova sessão" (AC-023.6).
+        # Três cartões por linha, na ordem do registro (SUP-065).
+        cameras = disponiveis.cameras
+        for inicio in range(0, len(cameras), 3):
+            for coluna, camera in zip(st.columns(3), cameras[inicio : inicio + 3]):
+                with coluna:
+                    _cartao(camera, config_dir, id_escolhida, travada)
+    else:
+        st.warning("Nenhuma câmera disponível.")
+        if disponiveis.motivo:
+            st.caption(disponiveis.motivo)
+
+    if st.session_state[CHAVE_FONTE] == FONTE_CAMERA:
+        _duracao_e_saida(travada)
+    else:
+        # Fonte de upload: duração, atalhos e "Manter clipes" não são
+        # desenhados (AC-026.2). Regravar as chaves impede o Streamlit de
+        # descartar o valor delas (R-4, D-11).
+        for chave in (CHAVE_DURACAO, CHAVE_MANTER_CLIPES):
+            if chave in st.session_state:
+                st.session_state[chave] = st.session_state[chave]
+        _area_de_envio(
+            _camera_por_id(disponiveis.cameras, id_escolhida), travada
+        )
+
     if tela.resultado_na_tela:
         st.button(
             "Nova sessão",
@@ -1105,6 +1208,10 @@ def _configuracao(
     if progresso.situacao is Situacao.EM_ANDAMENTO:
         # Sessão da interface: o botão de iniciar não é desenhado (AC-023.1).
         _parar_antecipadamente(progresso.andamento, data_dir)
+        return
+
+    if st.session_state[CHAVE_FONTE] == FONTE_UPLOAD:
+        # O botão de processar é da T-08; "Iniciar sessão" é só da câmera ao vivo.
         return
 
     indisponivel = tela.sessao_em_andamento or id_escolhida is None

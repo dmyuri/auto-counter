@@ -130,3 +130,35 @@ def test_AC_023_6_nova_sessao_devolve_a_opcao_com_o_valor_anterior(data_dir):
     checkbox = checkbox_manter_clipes(at)
     assert checkbox.disabled is False
     assert checkbox.value is True
+
+
+def muda_a_fonte(at, valor: str):
+    radio = next(r for r in at.radio if r.key == "fonte")
+    radio.set_value(valor)
+    return at.run()
+
+
+def test_AC_024_5_fonte_de_upload_esconde_a_opcao(tmp_path, monkeypatch):
+    registro_com(tmp_path, monkeypatch, "valida_000013.yaml")
+
+    at = muda_a_fonte(abre_a_interface(), "upload")
+
+    assert not [c for c in at.checkbox if c.label == "Manter clipes de vídeo"]
+    assert "Manter clipes de vídeo" not in textos(at)
+
+
+def test_AC_024_5_voltar_para_camera_ao_vivo_mostra_a_opcao_de_novo(
+    tmp_path, monkeypatch
+):
+    registro_com(tmp_path, monkeypatch, "valida_000013.yaml")
+
+    at = abre_a_interface()
+    checkbox_manter_clipes(at).set_value(True)
+    at = at.run()
+
+    at = muda_a_fonte(at, "upload")
+    assert not [c for c in at.checkbox if c.label == "Manter clipes de vídeo"]
+
+    at = muda_a_fonte(at, "camera")
+
+    assert checkbox_manter_clipes(at).value is True
