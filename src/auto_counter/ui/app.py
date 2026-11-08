@@ -349,9 +349,18 @@ CSS_DOS_COMPONENTES = """
 .st-key-categorias [data-testid="stProgress"] [data-testid="stProgressBarTrack"] {
   height: 4px; background: var(--line); border: none;
 }
-.st-key-tempos [data-testid="stMarkdownContainer"] p {
-  font-family: 'JetBrains Mono', monospace; font-size: 18px; font-weight: 700;
-  font-variant-numeric: tabular-nums; margin: 0;
+.st-key-tempos [data-testid="stColumn"] { gap: 4px; }
+[class*="st-key-rotulo_"] [data-testid="stMarkdownContainer"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px; margin: 0;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+[class*="st-key-valor_"] [data-testid="stMarkdownContainer"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 32px; font-weight: 700;
+  line-height: 1.1; margin: 0; font-variant-numeric: tabular-nums;
+  color: var(--ink);
+}
+.st-key-valor_estimado [data-testid="stMarkdownContainer"] p {
+  color: var(--muted);
 }
 .st-key-progresso [data-testid="stMarkdownContainer"] p {
   font-family: 'JetBrains Mono', monospace; font-size: 12px; color: var(--muted);
@@ -610,10 +619,20 @@ def _corpo_ao_vivo(
             st.info(AVISO_SEM_CONTAGEM_NA_CAPTURA)
     else:
         _categorias(quantidades, participacoes)
+    # Rótulo pequeno acima e valor grande abaixo, como no protótipo: são dois
+    # elementos, e é o CSS que dá a cada um o seu estilo (AC-017.1, AC-022.5).
     with st.container(key="tempos"):
         coluna_decorrido, coluna_estimado = st.columns(2)
-        coluna_decorrido.markdown(f"Tempo decorrido: {decorrido}")
-        coluna_estimado.markdown(f"Tempo estimado: {estimado}")
+        with coluna_decorrido:
+            with st.container(key="rotulo_decorrido"):
+                st.markdown("Tempo decorrido")
+            with st.container(key="valor_decorrido"):
+                st.markdown(decorrido)
+        with coluna_estimado:
+            with st.container(key="rotulo_estimado"):
+                st.markdown("Tempo estimado")
+            with st.container(key="valor_estimado"):
+                st.markdown(estimado)
 
 
 def _andamento(andamento: Andamento) -> None:

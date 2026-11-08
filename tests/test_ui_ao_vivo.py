@@ -35,6 +35,7 @@ from tests.test_ui_acompanhamento import (  # noqa: F401  (fixtures usadas por n
     clica,
     data_dir,
     relogio,
+    tempo,
     textos,
     trava_do_run,
 )
@@ -159,7 +160,7 @@ def test_AC_022_5_captura_mostra_tempo_estimado_mm_ss(data_dir, relogio):
     at = ao_vivo(data_dir)
 
     # max(0, 300 - 130,7) + 4 * 80 = 489,3 -> 489 s
-    assert "Tempo estimado: 08:09" in textos(at)
+    assert tempo(at, "Tempo estimado") == "08:09"
 
 
 def test_AC_022_6_processamento_mostra_tempo_estimado_mm_ss(data_dir, relogio):
@@ -175,13 +176,13 @@ def test_AC_022_6_processamento_mostra_tempo_estimado_mm_ss(data_dir, relogio):
     at = ao_vivo(data_dir)
 
     # max(80, 160 - 30,5) = 129,5 -> 129 s
-    assert "Tempo estimado: 02:09" in textos(at)
+    assert tempo(at, "Tempo estimado") == "02:09"
 
 
 def test_AC_022_6_todos_os_minutos_analisados_mostra_zero(data_dir, relogio):
     sessao_em_processamento(data_dir, a_processar=2, minutos_com_eventos=(0, 0))
 
-    assert "Tempo estimado: 00:00" in textos(ao_vivo(data_dir))
+    assert tempo(ao_vivo(data_dir), "Tempo estimado") == "00:00"
 
 
 def test_AC_022_6_estado_sem_tm_mostra_traco_no_tempo_estimado(data_dir, relogio):
@@ -197,7 +198,7 @@ def test_AC_022_6_estado_sem_tm_mostra_traco_no_tempo_estimado(data_dir, relogio
     a.minuto_da_captura(1, True)
     a.processamento_iniciado("000013-20260907T110000Z", 1)
 
-    assert "Tempo estimado: —" in textos(ao_vivo(data_dir))
+    assert tempo(ao_vivo(data_dir), "Tempo estimado") == "—"
 
 
 def test_AC_022_7_captura_nao_mostra_participacao_nem_barra_de_categoria(

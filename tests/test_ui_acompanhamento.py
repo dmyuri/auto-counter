@@ -71,6 +71,16 @@ def textos(at) -> str:
     return "\n".join(partes)
 
 
+def tempo(at, rotulo: str) -> str:
+    """O valor de um cronômetro: o markdown logo depois do rótulo (AC-017.1).
+
+    Rótulo e valor são dois elementos, para o rótulo ficar pequeno acima do
+    número grande, como no protótipo.
+    """
+    valores = [m.value for m in at.markdown]
+    return valores[valores.index(rotulo) + 1]
+
+
 def downloads(at) -> list:
     return list(at.get("download_button"))
 
@@ -396,13 +406,13 @@ def test_AC_017_1_captura_e_processamento_mostram_tempo_decorrido_mm_ss(
     with trava_do_run(data_dir):
         na_captura = abre_a_interface()
 
-    assert "Tempo decorrido: 01:15" in textos(na_captura)
+    assert tempo(na_captura, "Tempo decorrido") == "01:15"
 
     em_processamento(data_dir)
     with trava_do_run(data_dir):
         no_processamento = abre_a_interface()
 
-    assert "Tempo decorrido: 01:15" in textos(no_processamento)
+    assert tempo(no_processamento, "Tempo decorrido") == "01:15"
 
 
 def test_AC_017_3_tempo_exibido_avanca_com_o_relogio(data_dir, relogio):
@@ -410,11 +420,11 @@ def test_AC_017_3_tempo_exibido_avanca_com_o_relogio(data_dir, relogio):
 
     with trava_do_run(data_dir):
         at = abre_a_interface()
-        assert "Tempo decorrido: 00:00" in textos(at)
+        assert tempo(at, "Tempo decorrido") == "00:00"
         relogio.avancar(seconds=42)
         at = at.run()
 
-    assert "Tempo decorrido: 00:42" in textos(at)
+    assert tempo(at, "Tempo decorrido") == "00:42"
 
 
 def test_AC_017_4_reabrir_mostra_tempo_desde_o_inicio_da_sessao(data_dir, relogio):
@@ -424,7 +434,7 @@ def test_AC_017_4_reabrir_mostra_tempo_desde_o_inicio_da_sessao(data_dir, relogi
     with trava_do_run(data_dir):
         reaberta = abre_a_interface()
 
-    assert "Tempo decorrido: 07:03" in textos(reaberta)
+    assert tempo(reaberta, "Tempo decorrido") == "07:03"
 
 
 def test_AC_018_1_concluida_mostra_metricas_finais_e_tempo_total(data_dir, relogio):

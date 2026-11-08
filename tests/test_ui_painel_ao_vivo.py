@@ -32,6 +32,7 @@ from tests.test_ui_acompanhamento import (  # noqa: F401  (fixtures usadas por n
     data_dir,
     metricas,
     relogio,
+    tempo,
     termina,
     textos,
     trava_do_run,
@@ -74,8 +75,8 @@ def test_sem_sessao_o_painel_ao_vivo_mostra_zeros_como_no_prototipo(data_dir):
     assert participacoes(at) == ["0%"] * 4
     assert barras(at) == [0, 0, 0, 0, 0]
     assert "— veíc/min" in textos(at)
-    assert "Tempo decorrido: 00:00" in textos(at)
-    assert "Tempo estimado: 00:00" in textos(at)
+    assert tempo(at, "Tempo decorrido") == "00:00"
+    assert tempo(at, "Tempo estimado") == "00:00"
     assert "0% concluído" in textos(at)
 
 
@@ -143,8 +144,8 @@ def test_concluida_mostra_os_valores_finais_no_painel_ao_vivo(data_dir, relogio)
     assert participacoes(at) == ["100%", "0%", "0%", "0%"]
     assert "2,0 veíc/min" in textos(at)
     assert "100% concluído" in textos(at)
-    assert "Tempo decorrido: 17:05" in textos(at)
-    assert "Tempo estimado: 00:00" in textos(at)
+    assert tempo(at, "Tempo decorrido") == "17:05"
+    assert tempo(at, "Tempo estimado") == "00:00"
     # O resultado fica abaixo do painel ao vivo.
     assert subtitulos(at) == ["Contagem ao vivo · Praça Exemplo", "Sessão finalizada"]
 
