@@ -208,6 +208,13 @@ class Resultado:
     banco não pôde ser lido."""
     encerrada_pelo_usuario: bool = False
     """A sessão registra encerramento pelo usuário (AC-003.6); só em `CONCLUIDA`."""
+    nome_camera: str | None = None
+    id_camera: str = ""
+    """Para o título do painel ao vivo, que continua na tela depois do fim."""
+    participacoes: Participacoes | None = None
+    """Só na sessão concluída: é o que o painel ao vivo mostra no fim (AC-018.1)."""
+    taxa: str = TAXA_SEM_DADO
+    """Só na sessão concluída; nos demais desfechos, o traço (AC-018.3, AC-018.4)."""
 
 
 @dataclass(frozen=True)
@@ -316,6 +323,8 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             planilha=None,
             mensagem=MENSAGEM_PROCESSO_MORREU,
             chave=chave,
+            nome_camera=estado.nome_camera,
+            id_camera=estado.id_camera,
         )
 
     tempo_total = (
@@ -333,6 +342,8 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             mensagem=estado.mensagem,
             chave=chave,
             tempo_total=tempo_total,
+            nome_camera=estado.nome_camera,
+            id_camera=estado.id_camera,
         )
 
     do_banco = _sessao_do_banco(data_dir, estado.id_sessao)
@@ -343,6 +354,7 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         status = sessao.status.value
         aviso = linha_de_aviso(sessao)
 
+    quantidades = _quantidades(estado)
     planilha = Path(estado.planilha) if estado.planilha else None
     mensagem = estado.mensagem
     if planilha is not None and not planilha.is_file():
@@ -355,11 +367,17 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         planilha=planilha,
         mensagem=mensagem,
         chave=chave,
-        quantidades=_quantidades(estado),
+        quantidades=quantidades,
         tempo_total=tempo_total,
         registros=registros,
         encerrada_pelo_usuario=(
             False if sessao is None else sessao.encerrada_pelo_usuario
+        ),
+        nome_camera=estado.nome_camera,
+        id_camera=estado.id_camera,
+        participacoes=_participacoes(quantidades),
+        taxa=formatar_taxa(
+            estado.veiculos_nos_minutos_com_dado, estado.minutos_com_dado
         ),
     )
 

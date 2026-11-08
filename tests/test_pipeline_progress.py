@@ -894,3 +894,68 @@ def test_ler_progresso_continua_so_leitura(tmp_path):
     assert not caminho_do_banco(tmp_path).exists()
     assert resultado.registros is None
     assert instantaneo(tmp_path) == antes
+
+
+# --- layout-interface: o resultado traz o que o painel ao vivo mostra no fim ---
+
+
+def concluida_com_quantidades(data_dir, *, fim):
+    """Sessão concluída com 3 + 1 carros em dois minutos com dado."""
+    a = sessao_em_processamento(
+        data_dir,
+        a_processar=2,
+        minutos_com_eventos=(3, 1),
+        relogio=Relogio(fim),
+    )
+    a.terminar(Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="COMPLETA")
+
+
+def test_AC_018_1_resultado_concluido_traz_o_nome_da_camera_participacoes_e_taxa(
+    tmp_path,
+):
+    concluida_com_quantidades(tmp_path, fim=INICIO + timedelta(minutes=10))
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.nome_camera == "Praça Exemplo"
+    assert resultado.id_camera == "000013"
+    assert resultado.quantidades.total == 4
+    participacoes = resultado.participacoes
+    assert (
+        participacoes.carro,
+        participacoes.onibus,
+        participacoes.caminhao,
+        participacoes.moto,
+    ) == (100, 0, 0, 0)
+    # V = 4 em k = 2 minutos com dado.
+    assert resultado.taxa == "2,0 veíc/min"
+
+
+@pytest.mark.parametrize(
+    "fase", [Fase.PROCESSAMENTO_CANCELADO, Fase.SEM_PLANILHA, Fase.FALHOU]
+)
+def test_AC_018_3_desfecho_sem_contagem_nao_traz_participacoes_nem_taxa(tmp_path, fase):
+    a = sessao_em_processamento(
+        tmp_path, a_processar=2, minutos_com_eventos=(3,), relogio=Relogio(INICIO)
+    )
+    a.terminar(fase, id_sessao=ID_SESSAO, status="COMPLETA", mensagem="x")
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.nome_camera == "Praça Exemplo"
+    assert resultado.quantidades is None
+    assert resultado.participacoes is None
+    assert resultado.taxa == "— veíc/min"
+
+
+def test_AC_018_4_processo_morto_nao_traz_participacoes_nem_taxa(tmp_path):
+    pid, _ = pid_morto()
+    a = anotador(tmp_path, pid=pid)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.quantidades is None
+    assert resultado.participacoes is None
+    assert resultado.taxa == "— veíc/min"

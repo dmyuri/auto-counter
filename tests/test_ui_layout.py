@@ -87,7 +87,7 @@ def data_dir(tmp_path, monkeypatch):
 def indicador(at) -> str:
     """O texto do indicador do cabeçalho."""
     achados = [
-        re.search(r'<span class="indicador">(.*?)</span>', m.value)
+        re.search(r'<span class="indicador"[^>]*>(.*?)</span>', m.value)
         for m in at.markdown
     ]
     textos_do_indicador = [a.group(1) for a in achados if a]
