@@ -35,6 +35,11 @@ SUP-074).
 Esta é só a casca (SUP-038): nenhuma regra de captura, contagem ou exportação
 mora aqui. O script importa apenas `streamlit`, a biblioteca padrão, `dotenv` e
 `auto_counter.pipeline`, e é o `pipeline` que lê o progresso e dispara a sessão.
+
+E, por `download-clipes`, o painel de Configuração tem a opção "Manter
+clipes de vídeo", desligada por padrão (AC-024.1), repassada a
+`launch.iniciar_sessao` ao iniciar (AC-024.2, AC-024.3) e indisponível com
+sessão em andamento ou resultado na tela (AC-024.4).
 """
 
 import argparse
@@ -87,6 +92,8 @@ CHAVE_CAMERA = "camera"
 # O id da câmera selecionada nesta aba; padrão, a primeira do registro (D-13).
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
 # A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074).
+CHAVE_MANTER_CLIPES = "manter_clipes"
+# A opção "Manter clipes de vídeo" (AC-024.1, D-8 de `download-clipes`).
 
 TEMA_ESCURO = "escuro"
 TEMA_CLARO = "claro"
@@ -401,6 +408,39 @@ CSS_DOS_COMPONENTES = """
   background: var(--accent); color: var(--accentInk); border: none;
   font-weight: 700;
 }
+
+/* clip retention toggle */
+.st-key-manter_clipes_cartao {
+  background: var(--panel2); border: 1px solid var(--line); padding: 16px;
+}
+.st-key-manter_clipes_cartao [data-testid="stMarkdownContainer"] p { margin: 0; font-size: 14px; }
+.st-key-manter_clipes_cartao [data-testid="stCaptionContainer"] p { margin: 2px 0 0; font-size: 12px; }
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] { display: flex; justify-content: flex-end; }
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label {
+  display: flex; align-items: center; cursor: pointer;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label > div:first-of-type {
+  width: 56px; height: 28px; border-radius: 1px; position: relative;
+  background: var(--line); border: 1px solid var(--line); flex: none;
+  transition: background .15s ease, border-color .15s ease;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label > div:first-of-type::after {
+  content: ""; position: absolute; top: 4px; left: 4px;
+  width: 20px; height: 20px; border-radius: 1px;
+  background: var(--bg); transition: left .15s ease;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label:has(input:checked)
+> div:first-of-type {
+  background: var(--accent); border-color: var(--accent);
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label:has(input:checked)
+> div:first-of-type::after {
+  left: calc(100% - 24px);
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"] label > div:first-of-type svg {
+  display: none;
+}
+.st-key-manter_clipes_cartao [data-testid="stCheckbox"]:has(input:disabled) { opacity: .55; }
 
 /* notices */
 [data-testid="stAlertContainer"] {
@@ -931,6 +971,24 @@ def _configuracao(
             args=(atalho,),
         )
 
+    st.markdown('<span class="rotulo">Saída</span>', unsafe_allow_html=True)
+    st.session_state.setdefault(CHAVE_MANTER_CLIPES, False)
+    with st.container(key="manter_clipes_cartao"):
+        texto, controle = st.columns([5, 1], vertical_alignment="center")
+        with texto:
+            st.markdown("**Manter clipes de vídeo**")
+            st.caption(
+                "Salva os trechos processados para download ao final. A "
+                "planilha .xlsx é sempre gerada."
+            )
+        with controle:
+            st.checkbox(
+                "Manter clipes de vídeo",
+                key=CHAVE_MANTER_CLIPES,
+                disabled=travada,
+                label_visibility="collapsed",
+            )
+
     if tela.resultado_na_tela:
         st.button(
             "Nova sessão",
@@ -959,6 +1017,7 @@ def _configuracao(
                 int(st.session_state[CHAVE_DURACAO]),
                 data_dir=data_dir,
                 config_dir=config_dir,
+                manter_videos=bool(st.session_state[CHAVE_MANTER_CLIPES]),
             )
         except OutraSessaoEmAndamentoError as falha:
             st.error(str(falha))
