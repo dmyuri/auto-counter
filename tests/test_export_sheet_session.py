@@ -5,9 +5,11 @@ e SUP-033. A planilha é montada em memória, e o banco vive em `tmp_path`.
 """
 
 from datetime import datetime
+from pathlib import Path
 
 from openpyxl import Workbook
 
+from auto_counter.cameras.registry import carregar_registro
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.export.load import carregar
 from auto_counter.export.sheet_session import escrever_sessao
@@ -109,3 +111,21 @@ def test_sessao_gravada_sem_nome_da_camera_deixa_a_celula_vazia(tmp_path):
     aba = _aba(tmp_path, nome_camera=None)
 
     assert _campos(aba)["nome da câmera"] is None
+
+
+def test_AC_032_6_aba_de_metadados_registra_id_e_nome_da_000012(tmp_path):
+    diretorio = Path(__file__).resolve().parents[1] / "config" / "cameras"
+    camera = {c.id: c for c in carregar_registro(diretorio).cameras}["000012"]
+
+    campos = _campos(
+        _aba(
+            tmp_path,
+            id_camera=camera.id,
+            nome_camera=camera.nome,
+            sentido_a=camera.sentido_a,
+            sentido_b=camera.sentido_b,
+        )
+    )
+
+    assert campos["id da câmera"] == "000012"
+    assert campos["nome da câmera"] == "Praia x Mariz Barros"
