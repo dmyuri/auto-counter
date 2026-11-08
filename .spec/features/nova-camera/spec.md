@@ -82,8 +82,7 @@ Critérios de aceite:
   AC-032.5 — Dado uma sessão da câmera 000012 com um cruzamento simulado no
   sentido da normal de p1 para p2 da linha dela e outro no sentido oposto,
   quando a sessão é processada, então os eventos gravados trazem
-  respectivamente o `sentido_a` e o `sentido_b` da 000012, e nenhum evento traz
-  os rótulos da 000013.
+  respectivamente o `sentido_a` e o `sentido_b` da 000012, lidos do YAML dela.
 
   AC-032.6 — Dado uma sessão COMPLETA da câmera 000012 processada, quando ela é
   exportada, então o arquivo XLSX tem o nome
@@ -132,9 +131,12 @@ Critérios de aceite:
   spec. Afeta AC-031.2 e AC-032.5.
 - [x] SUP-105 — O YAML da 000012 segue o schema vigente quando ela for
   implementada, inclusive o campo obrigatório `resolucao` de SUP-086
-  (`upload-videos`). Hoje o YAML da 000013 ainda não tem esse campo. Se
-  `upload-videos` não estiver implementada, AC-032.7 fica bloqueado até ela
-  estar, e os demais critérios não dependem dele. Afeta AC-031.2 e AC-032.7.
+  (`upload-videos`). Hoje nem o modelo de câmera nem o YAML da 000013 têm esse
+  campo. Enquanto `upload-videos` não estiver implementada, a 000012 entra sem
+  `resolucao`, e ficam bloqueados a parte de resolução de AC-031.2 ("resolução
+  de calibração declarada, com os dois pontos da linha dentro dos limites dessa
+  resolução") e o AC-032.7 inteiro. Os demais critérios não dependem dela.
+  Decidido pelo autor em 2026-11-08. Afeta AC-031.2 e AC-032.7.
 - [x] SUP-106 — A 000012 tem prévia: uma imagem fixa versionada em
   `config/cameras/`, indicada no campo `preview` do YAML dela, escolhida sem
   placa nem pessoa identificável, como recomenda o README. Confirmado pelo
