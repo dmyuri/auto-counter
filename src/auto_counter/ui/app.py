@@ -66,7 +66,13 @@ item da lista sem apagar o arquivo (AC-027.8) e fica indisponível com a tela tr
 
 No lugar de "Iniciar sessão", o upload tem o botão "Processar N vídeos" (AC-027.9), com o
 texto e a disponibilidade de `avaliar_envio`, e a mensagem do limite de 15 min logo acima
-dele (AC-027.11). O clique ainda não faz nada: é de `processamento-upload`.
+dele (AC-027.11).
+
+E, por `processamento-upload`: o clique em "Processar N vídeos" dispara `session upload`
+em segundo plano com a câmera selecionada e só os vídeos válidos, na ordem da lista, e
+espera a sessão assumir a trava (AC-028.1). Disparo confirmado consome a lista da aba,
+porque os vídeos entraram na sessão (nota de AC-023.6 de `upload-videos`); recusado ou
+não confirmado, a lista fica e o motivo aparece na tela, sem traceback.
 """
 
 import argparse
@@ -1317,6 +1323,45 @@ def _area_de_envio(camera, data_dir: Path, tela: EstadoDaTela) -> AvaliacaoDoEnv
     return avaliacao
 
 
+def _processar_videos(
+    camera, avaliacao: AvaliacaoDoEnvio, data_dir: Path, config_dir: Path
+) -> None:
+    """Dispara `session upload` com os vídeos válidos, na ordem da lista (AC-028.1).
+
+    Quais vídeos entram é da avaliação do `pipeline` (SUP-038): a tela só os
+    reencontra na lista da aba pelo `id`. Confirmado o início, a lista da aba é
+    consumida (nota de AC-023.6 de `upload-videos`); recusado ou não
+    confirmado, ela fica e o motivo aparece em `st.error`.
+    """
+    itens = {item.id: item for item in st.session_state[CHAVE_ENVIO_ITENS]}
+    validos = [
+        itens[linha.id]
+        for linha in avaliacao.linhas
+        if linha.situacao is SituacaoDoEnvio.VALIDO
+    ]
+    try:
+        disparada = launch.iniciar_upload(
+            camera.id,
+            [item.caminho for item in validos],
+            [item.nome for item in validos],
+            data_dir=data_dir,
+            config_dir=config_dir,
+        )
+    except OutraSessaoEmAndamentoError as falha:
+        st.error(str(falha))
+        return
+    except Exception as falha:  # noqa: BLE001 — a tela nunca mostra traceback
+        st.error(f"Não foi possível iniciar a sessão: {falha}")
+        return
+
+    problema = launch.aguardar_inicio(disparada, comando="upload")
+    if problema is None:
+        st.session_state[CHAVE_ENVIO_ITENS] = []
+        st.rerun()
+    else:
+        st.error(f"A sessão não iniciou: {problema}")
+
+
 def _configuracao(
     config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
 ) -> None:
@@ -1392,17 +1437,21 @@ def _configuracao(
 
     if avaliacao_do_envio is not None:
         # Fonte de upload: o botão troca "Iniciar sessão" (D-9). Texto e
-        # disponibilidade vêm de `avaliar_envio`. O clique não faz nada aqui:
-        # o que acontece depois dele é de `processamento-upload` (AC-028.1), e
-        # nenhum caminho de upload chama `launch.iniciar_sessao`.
+        # disponibilidade vêm de `avaliar_envio`. O clique dispara
+        # `session upload` (AC-028.1); nenhum caminho de upload chama
+        # `launch.iniciar_sessao`.
         if avaliacao_do_envio.aviso_do_limite:
             st.error(avaliacao_do_envio.aviso_do_limite)
-        st.button(
+        camera_do_upload = _camera_por_id(disponiveis.cameras, id_escolhida)
+        if st.button(
             avaliacao_do_envio.texto_do_botao,
             key="processar_videos",
             type="primary",
             disabled=not avaliacao_do_envio.botao_disponivel,
-        )
+        ) and camera_do_upload is not None:
+            _processar_videos(
+                camera_do_upload, avaliacao_do_envio, data_dir, config_dir
+            )
         return
 
     indisponivel = tela.sessao_em_andamento or id_escolhida is None

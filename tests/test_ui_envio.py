@@ -447,20 +447,6 @@ def test_AC_027_11_soma_acima_de_15_min_trava_o_botao_e_mostra_a_mensagem(
     assert "15:01" in mensagem
 
 
-def test_D_9_clicar_em_processar_nao_dispara_sessao(
-    tmp_path, monkeypatch, leituras, disparo
-):
-    at = abre_o_upload(tmp_path, monkeypatch)
-    at = envia(at, video("a.mp4", b"a"))
-
-    botao_processar(at).click()
-    at = at.run()
-
-    assert not at.exception
-    assert disparo.chamadas == []
-    assert nomes_na_lista(at) == ["a.mp4"]
-
-
 def test_AC_013_1_outra_sessao_em_andamento_trava_o_processar(
     tmp_path, monkeypatch, leituras
 ):
