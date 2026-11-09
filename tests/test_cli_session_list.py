@@ -17,6 +17,7 @@ from typer.testing import CliRunner
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.cli import app
 from auto_counter.storage.connection import NOME_DO_ARQUIVO_DO_BANCO, conectar
+from auto_counter.storage.model import OrigemDaSessao
 from auto_counter.storage.sessions import abrir_sessao, fechar_captura
 
 ID_CAMERA = "000013"
@@ -162,3 +163,67 @@ def test_session_list_mostra_sessao_em_andamento_sem_status_inventado(runner, da
     assert "em-andamento" in resultado.output
     for status in StatusDaSessao:
         assert status.value not in resultado.output
+
+
+def _abrir_com_origem(conexao, id_sessao: str, origem: OrigemDaSessao, criada_em: datetime):
+    abrir_sessao(
+        conexao,
+        id_sessao=id_sessao,
+        id_camera=ID_CAMERA,
+        criada_em=criada_em,
+        duracao_pedida=1,
+        sentido_a=SENTIDO_A,
+        sentido_b=SENTIDO_B,
+        origem=origem,
+    )
+    fechar_captura(
+        conexao,
+        id_sessao,
+        inicio=criada_em,
+        fim=criada_em + timedelta(minutes=1),
+        duracao_real=1,
+        encerrada_pelo_usuario=False,
+        status=StatusDaSessao.COMPLETA,
+        minutos_perdidos=(),
+    )
+
+
+def _linha_da_sessao(saida: str, id_sessao: str) -> str:
+    return next(linha for linha in saida.splitlines() if linha.startswith(id_sessao))
+
+
+def test_AC_030_2_session_list_mostra_a_origem_de_cada_sessao(runner, data_dir):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(data_dir) as conexao:
+        _abrir_com_origem(conexao, "sessao-camera", OrigemDaSessao.CAMERA, base)
+        _abrir_com_origem(
+            conexao, "sessao-upload", OrigemDaSessao.UPLOAD, base + timedelta(minutes=10)
+        )
+        conexao.commit()
+
+    resultado = runner.invoke(app, ["session", "list"])
+
+    assert resultado.exit_code == 0, resultado.output
+    linha_camera = _linha_da_sessao(resultado.output, "sessao-camera")
+    linha_upload = _linha_da_sessao(resultado.output, "sessao-upload")
+    assert f"sessao-camera  CAMERA {ID_CAMERA}  " in linha_camera
+    assert f"sessao-upload  UPLOAD {ID_CAMERA}  " in linha_upload
+
+
+def test_AC_030_2_periodo_do_upload_marcado_como_horario_do_processamento(
+    runner, data_dir
+):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(data_dir) as conexao:
+        _abrir_com_origem(conexao, "sessao-camera", OrigemDaSessao.CAMERA, base)
+        _abrir_com_origem(
+            conexao, "sessao-upload", OrigemDaSessao.UPLOAD, base + timedelta(minutes=10)
+        )
+        conexao.commit()
+
+    resultado = runner.invoke(app, ["session", "list"])
+
+    assert resultado.exit_code == 0, resultado.output
+    marca = "(horário do processamento)"
+    assert marca in _linha_da_sessao(resultado.output, "sessao-upload")
+    assert marca not in _linha_da_sessao(resultado.output, "sessao-camera")

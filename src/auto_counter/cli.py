@@ -32,6 +32,10 @@ para `session run`, `session capture` e `session process`; `session list` e
 De `.spec/features/interface-sessao/spec.md`: SUP-041 (o comando `ui` abre a
 interface apenas em localhost, sem autenticação).
 
+De `.spec/features/processamento-upload/spec.md`: AC-030.2 (`session list`
+mostra a origem de cada sessão, e o período da sessão de upload é marcado como
+horário do processamento).
+
 Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 """
@@ -107,6 +111,7 @@ from auto_counter.pipeline.processing import (
 )
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.connection import conectar as conectar_ao_banco
+from auto_counter.storage.model import OrigemDaSessao
 from auto_counter.storage.persist import persistir_sessao
 from auto_counter.storage.sessions import (
     PersistenciaDaCaptura,
@@ -863,6 +868,11 @@ def listar_sessoes_capturadas(
 
     Nenhuma câmera é resolvida pelo registro — o id da câmera já está gravado
     na linha de cada sessão.
+
+    Cada linha traz a origem da sessão, CAMERA ou UPLOAD (AC-030.2, feature
+    `processamento-upload`). Na sessão de upload o período é o do
+    processamento, e não o de gravação dos vídeos (Q-020), então ganha a marca
+    "(horário do processamento)".
     """
     data_dir = _data_dir()
     caminho = caminho_do_banco(data_dir)
@@ -890,9 +900,11 @@ def listar_sessoes_capturadas(
     for item in sessoes:
         status_texto = "—" if item.status is None else item.status.value
         periodo = f"{item.inicio or '—'} .. {item.fim or '—'}"
+        if item.origem is OrigemDaSessao.UPLOAD:
+            periodo += " (horário do processamento)"
         typer.echo(
-            f"{item.id_sessao}  {item.id_camera}  {periodo}  {status_texto}  "
-            f"{item.total_de_eventos} veículo(s)"
+            f"{item.id_sessao}  {item.origem.value} {item.id_camera}  {periodo}  "
+            f"{status_texto}  {item.total_de_eventos} veículo(s)"
         )
 
 
