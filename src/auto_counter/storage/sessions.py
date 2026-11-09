@@ -38,7 +38,12 @@ from datetime import datetime, timezone
 
 from auto_counter.cameras.model import Camera
 from auto_counter.capture.status import StatusDaSessao
-from auto_counter.storage.model import SessaoGravada, SessaoNoHistorico
+from auto_counter.storage.model import (
+    OrigemDaSessao,
+    SessaoGravada,
+    SessaoNoHistorico,
+    VideoGravado,
+)
 
 
 class SessaoInexistenteError(LookupError):
@@ -93,9 +98,12 @@ def abrir_sessao(
     sentido_a: str,
     sentido_b: str,
     nome_camera: str | None = None,
+    origem: OrigemDaSessao = OrigemDaSessao.CAMERA,
     comitar: bool = True,
 ) -> None:
     """Momento 1 de D-1: abre a linha no início da captura.
+
+    `origem` é `CAMERA` (padrão) ou `UPLOAD` (migration 003, AC-030.1).
 
     `nome_camera` é opcional (migration 002, AC-010.4): o nome vigente na
     sessão, gravado como os rótulos de sentido.
@@ -116,8 +124,8 @@ def abrir_sessao(
         """
         INSERT INTO sessao
             (id_sessao, id_camera, criada_em, duracao_pedida,
-             sentido_a, sentido_b, nome_camera)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+             sentido_a, sentido_b, nome_camera, origem)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT (id_sessao) DO NOTHING
         """,
         (
@@ -128,8 +136,49 @@ def abrir_sessao(
             sentido_a,
             sentido_b,
             nome_camera,
+            origem.value,
         ),
     )
+    if comitar:
+        conexao.commit()
+
+
+def gravar_videos(
+    conexao: sqlite3.Connection,
+    id_sessao: str,
+    videos: tuple[VideoGravado, ...] | list[VideoGravado],
+    *,
+    comitar: bool = True,
+) -> None:
+    """Grava os vídeos de uma sessão de upload (AC-030.1).
+
+    Apaga os da sessão antes de inserir os novos (D-7 de
+    `persistencia-resultados`), então regravar não duplica.
+    """
+    conexao.execute("DELETE FROM video_da_sessao WHERE id_sessao = ?", (id_sessao,))
+    try:
+        conexao.executemany(
+            """
+            INSERT INTO video_da_sessao
+                (id_sessao, posicao, nome_original, duracao_segundos, sha256,
+                 minuto_inicial, minuto_final)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [
+                (
+                    id_sessao,
+                    video.posicao,
+                    video.nome_original,
+                    video.duracao_segundos,
+                    video.sha256,
+                    video.minuto_inicial,
+                    video.minuto_final,
+                )
+                for video in videos
+            ],
+        )
+    except sqlite3.IntegrityError as falha:
+        raise SessaoInexistenteError(id_sessao) from falha
     if comitar:
         conexao.commit()
 
@@ -252,6 +301,22 @@ def ler_sessao(conexao: sqlite3.Connection, id_sessao: str) -> SessaoGravada | N
         limiar_de_confianca=linha["limiar_de_confianca"],
         sentido_a=linha["sentido_a"],
         sentido_b=linha["sentido_b"],
+        origem=OrigemDaSessao(linha["origem"]),
+        videos=tuple(
+            VideoGravado(
+                posicao=video["posicao"],
+                nome_original=video["nome_original"],
+                duracao_segundos=video["duracao_segundos"],
+                sha256=video["sha256"],
+                minuto_inicial=video["minuto_inicial"],
+                minuto_final=video["minuto_final"],
+            )
+            for video in conexao.execute(
+                "SELECT * FROM video_da_sessao WHERE id_sessao = ? "
+                "ORDER BY posicao",
+                (id_sessao,),
+            )
+        ),
     )
 
 
@@ -280,6 +345,7 @@ def listar_sessoes(
             s.inicio AS inicio,
             s.fim AS fim,
             s.status AS status,
+            s.origem AS origem,
             COUNT(e.id_sessao) AS total_de_eventos
         FROM sessao s
         LEFT JOIN evento e ON e.id_sessao = s.id_sessao
@@ -304,6 +370,7 @@ def listar_sessoes(
                 None if linha["status"] is None else StatusDaSessao(linha["status"])
             ),
             total_de_eventos=linha["total_de_eventos"],
+            origem=OrigemDaSessao(linha["origem"]),
         )
         for linha in linhas
     )

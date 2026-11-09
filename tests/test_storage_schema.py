@@ -77,15 +77,15 @@ def test_aplicar_migrations_duas_vezes_nao_reaplica_nem_duplica_versao(tmp_path)
     assert [linha["versao"] for linha in linhas] == sorted(MIGRATIONS)
 
 
-def test_um_banco_novo_chega_a_versao_2(tmp_path):
+def test_um_banco_novo_chega_a_versao_3(tmp_path):
     with conectar(tmp_path) as conexao:
         versao = conexao.execute("SELECT MAX(versao) AS v FROM schema_version").fetchone()
 
-    assert versao["v"] == 2
-    assert VERSAO_ATUAL == 2
+    assert versao["v"] == 3
+    assert VERSAO_ATUAL == 3
 
 
-def test_banco_na_versao_1_sobe_para_a_2_sem_perder_as_sessoes_gravadas(
+def test_banco_na_versao_1_sobe_para_a_3_sem_perder_as_sessoes_gravadas(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(schema, "MIGRATIONS", {1: MIGRATIONS[1]})
@@ -103,7 +103,7 @@ def test_banco_na_versao_1_sobe_para_a_2_sem_perder_as_sessoes_gravadas(
             "SELECT id_camera, nome_camera FROM sessao WHERE id_sessao = 'antiga'"
         ).fetchone()
 
-    assert versoes == [1, 2]
+    assert versoes == [1, 2, 3]
     assert sessao["id_camera"] == ID_CAMERA
     assert sessao["nome_camera"] is None
 
@@ -208,4 +208,78 @@ def test_evento_de_sessao_inexistente_e_recusado_pela_chave_estrangeira(tmp_path
                 """,
                 ("sessao-inexistente", "1:1", "Icaraí",
                  "2026-01-01T00:01:00+00:00", "CARRO", 0.9, 1),
+            )
+
+
+# --- processamento-upload: migration 003 (SUP-096, D-8) ---
+
+from auto_counter.storage.model import OrigemDaSessao  # noqa: E402
+from auto_counter.storage.sessions import ler_sessao  # noqa: E402
+
+
+def _banco_na_versao_2(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        schema, "MIGRATIONS", {1: MIGRATIONS[1], 2: MIGRATIONS[2]}
+    )
+    with conectar(tmp_path) as conexao:
+        _inserir_sessao(conexao, "antiga")
+        conexao.commit()
+    monkeypatch.undo()
+
+
+def test_SUP_096_migration_003_aplica_sobre_banco_na_versao_2(tmp_path, monkeypatch):
+    _banco_na_versao_2(tmp_path, monkeypatch)
+
+    with conectar(tmp_path) as conexao:
+        versoes = [
+            linha["versao"]
+            for linha in conexao.execute("SELECT versao FROM schema_version")
+        ]
+        colunas_da_sessao = {
+            linha["name"] for linha in conexao.execute("PRAGMA table_info(sessao)")
+        }
+        colunas_do_evento = {
+            linha["name"] for linha in conexao.execute("PRAGMA table_info(evento)")
+        }
+        colunas_do_video = {
+            linha["name"]
+            for linha in conexao.execute("PRAGMA table_info(video_da_sessao)")
+        }
+
+    assert versoes == [1, 2, 3]
+    assert "origem" in colunas_da_sessao
+    assert {"video", "deslocamento"} <= colunas_do_evento
+    assert colunas_do_video == {
+        "id_sessao",
+        "posicao",
+        "nome_original",
+        "duracao_segundos",
+        "sha256",
+        "minuto_inicial",
+        "minuto_final",
+    }
+
+
+def test_AC_030_1_sessao_existente_recebe_origem_camera_na_migration(
+    tmp_path, monkeypatch
+):
+    _banco_na_versao_2(tmp_path, monkeypatch)
+
+    with conectar(tmp_path) as conexao:
+        sessao = ler_sessao(conexao, "antiga")
+
+    assert sessao.origem is OrigemDaSessao.CAMERA
+    assert sessao.videos == ()
+
+
+def test_SUP_096_origem_fora_do_vocabulario_e_recusada_pelo_check(tmp_path):
+    with conectar(tmp_path) as conexao:
+        with pytest.raises(sqlite3.IntegrityError):
+            conexao.execute(
+                """
+                INSERT INTO sessao (id_sessao, id_camera, criada_em, duracao_pedida,
+                                    origem)
+                VALUES ('x', ?, ?, 1, 'OUTRA')
+                """,
+                (ID_CAMERA, CRIADA_EM),
             )

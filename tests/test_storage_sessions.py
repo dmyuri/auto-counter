@@ -247,3 +247,51 @@ def test_completar_processamento_de_sessao_inexistente_erra_citando_o_id(tmp_pat
 def test_ler_sessao_inexistente_devolve_none(tmp_path):
     with conectar(tmp_path) as conexao:
         assert ler_sessao(conexao, "sessao-que-nao-existe") is None
+
+
+# --- processamento-upload: origem e vídeos da sessão (SUP-096) ---
+
+from auto_counter.storage.model import OrigemDaSessao, VideoGravado  # noqa: E402
+from auto_counter.storage.sessions import gravar_videos  # noqa: E402
+
+
+def _videos():
+    return (
+        VideoGravado(2, "segundo.mov", 45, "b" * 64, 4, 4),
+        VideoGravado(1, "primeiro.mp4", 130, "a" * 64, 1, 3),
+    )
+
+
+def test_AC_030_1_videos_da_sessao_ida_e_volta_em_ordem_de_posicao(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, origem=OrigemDaSessao.UPLOAD)
+        gravar_videos(conexao, ID_SESSAO, _videos())
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.origem is OrigemDaSessao.UPLOAD
+    assert sessao.videos == (
+        VideoGravado(1, "primeiro.mp4", 130, "a" * 64, 1, 3),
+        VideoGravado(2, "segundo.mov", 45, "b" * 64, 4, 4),
+    )
+
+
+def test_AC_030_1_regravar_os_videos_nao_duplica(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, origem=OrigemDaSessao.UPLOAD)
+        gravar_videos(conexao, ID_SESSAO, _videos())
+        gravar_videos(conexao, ID_SESSAO, _videos())
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert len(sessao.videos) == 2
+
+
+def test_AC_030_1_sessao_ao_vivo_tem_origem_camera_e_nenhum_video(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao)
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.origem is OrigemDaSessao.CAMERA
+    assert sessao.videos == ()

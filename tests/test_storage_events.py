@@ -247,3 +247,39 @@ def test_ler_eventos_de_sessao_sem_evento_devolve_tupla_vazia(tmp_path):
         _abrir(conexao, "s1")
 
         assert ler_eventos(conexao, "s1") == ()
+
+
+# --- processamento-upload: vídeo e deslocamento do evento (SUP-100) ---
+
+
+def test_SUP_100_evento_de_upload_ida_e_volta_com_video_e_deslocamento(tmp_path):
+    evento = Evento(
+        timestamp=datetime(2026, 1, 1, 8, 2, 12, tzinfo=timezone.utc),
+        categoria=Categoria.CARRO,
+        sentido="Icaraí",
+        id_de_rastreio="3:9",
+        confianca=0.8,
+        minuto=3,
+        indice_do_frame=120,
+        posicao_na_linha=0.5,
+        video=2,
+        deslocamento_segundos=12,
+    )
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, "s1")
+        gravar_eventos(conexao, "s1", [evento])
+
+        [lido] = ler_eventos(conexao, "s1")
+
+    assert (lido.video, lido.deslocamento) == (2, 12)
+
+
+def test_evento_ao_vivo_continua_com_video_e_deslocamento_nulos(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, "s1")
+        gravar_eventos(conexao, "s1", [_evento()])
+
+        [lido] = ler_eventos(conexao, "s1")
+
+    assert lido.video is None
+    assert lido.deslocamento is None

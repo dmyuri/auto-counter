@@ -189,3 +189,38 @@ def test_listar_sessoes_respeita_o_limite(tmp_path):
 def test_listar_sessoes_sem_nenhuma_sessao_devolve_tupla_vazia(tmp_path):
     with conectar(tmp_path) as conexao:
         assert listar_sessoes(conexao) == ()
+
+
+# --- processamento-upload: origem no histórico (AC-030.2) ---
+
+
+def test_AC_030_2_historico_traz_a_origem_de_cada_sessao(tmp_path):
+    from auto_counter.storage.model import OrigemDaSessao
+
+    with conectar(tmp_path) as conexao:
+        abrir_sessao(
+            conexao,
+            id_sessao="ao-vivo",
+            id_camera=ID_CAMERA,
+            criada_em=datetime(2026, 1, 1, 8, 0, tzinfo=timezone.utc),
+            duracao_pedida=1,
+            sentido_a=SENTIDO_A,
+            sentido_b=SENTIDO_B,
+        )
+        abrir_sessao(
+            conexao,
+            id_sessao="enviada",
+            id_camera=ID_CAMERA,
+            criada_em=datetime(2026, 1, 2, 8, 0, tzinfo=timezone.utc),
+            duracao_pedida=1,
+            sentido_a=SENTIDO_A,
+            sentido_b=SENTIDO_B,
+            origem=OrigemDaSessao.UPLOAD,
+        )
+
+        historico = listar_sessoes(conexao)
+
+    assert [(s.id_sessao, s.origem) for s in historico] == [
+        ("enviada", OrigemDaSessao.UPLOAD),
+        ("ao-vivo", OrigemDaSessao.CAMERA),
+    ]

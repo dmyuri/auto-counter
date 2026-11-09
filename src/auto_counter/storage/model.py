@@ -15,6 +15,29 @@ from auto_counter.capture.status import StatusDaSessao
 from auto_counter.counting.config import Categoria
 
 
+class OrigemDaSessao(Enum):
+    """De onde vieram os vídeos da sessão (AC-030.1).
+
+    O valor é o próprio nome, que é o que a coluna `origem` guarda. As sessões
+    gravadas antes de `processamento-upload` são `CAMERA` (SUP-096).
+    """
+
+    CAMERA = "CAMERA"
+    UPLOAD = "UPLOAD"
+
+
+@dataclass(frozen=True)
+class VideoGravado:
+    """Uma linha de `video_da_sessao`: um vídeo enviado (AC-030.1)."""
+
+    posicao: int
+    nome_original: str
+    duracao_segundos: int
+    sha256: str
+    minuto_inicial: int
+    minuto_final: int
+
+
 class EstadoDoMinuto(Enum):
     """SUP-028: minuto sem dado é uma coluna de estado, e nenhuma outra
     coisa — nunca ausência de linha, nunca contagem nula fazendo as vezes de
@@ -78,6 +101,9 @@ class SessaoGravada:
     limiar_de_confianca: float | None
     sentido_a: str | None
     sentido_b: str | None
+    origem: OrigemDaSessao = OrigemDaSessao.CAMERA
+    videos: tuple[VideoGravado, ...] = ()
+    """Só na sessão de upload, em ordem de posição."""
 
 
 @dataclass(frozen=True)
@@ -94,6 +120,7 @@ class SessaoNoHistorico:
     fim: datetime | None
     status: StatusDaSessao | None
     total_de_eventos: int
+    origem: OrigemDaSessao = OrigemDaSessao.CAMERA
 
 
 @dataclass(frozen=True)
@@ -111,3 +138,7 @@ class EventoGravado:
     categoria: Categoria
     confianca: float
     minuto: int
+    video: int | None = None
+    deslocamento: int | None = None
+    """Só no evento de upload (SUP-100): vídeo de origem e segundos desde o
+    início dele."""
