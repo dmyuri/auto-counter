@@ -32,7 +32,11 @@ para `session run`, `session capture` e `session process`; `session list` e
 De `.spec/features/interface-sessao/spec.md`: SUP-041 (o comando `ui` abre a
 interface apenas em localhost, sem autenticação).
 
-De `.spec/features/processamento-upload/spec.md`: AC-030.2 (`session list`
+De `.spec/features/processamento-upload/spec.md`: AC-030.7 e SUP-098 (o comando
+`session upload <id_camera> <arquivo>...` roda o pipeline completo até o XLSX
+sem a interface web, recusa o arquivo inválido nomeando-o antes de qualquer
+processamento, avisa a duplicata em `stderr` e pega a mesma trava de sessão
+única), AC-030.2 (`session list`
 mostra a origem de cada sessão, e o período da sessão de upload é marcado como
 horário do processamento).
 
@@ -100,7 +104,9 @@ from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
     data_dir_do_ambiente,
 )
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError, adquirir_trava
+from auto_counter.pipeline.preparo_upload import triar_arquivos
 from auto_counter.pipeline.run import executar_sessao
+from auto_counter.pipeline.upload import executar_upload
 from auto_counter.pipeline.state import Fase
 from auto_counter.pipeline.stop import ParadaComposta, ParadaPorArquivo
 from auto_counter.pipeline.processing import (
@@ -594,6 +600,101 @@ def executar_sessao_completa(
         raise _erro(
             "sessão abortada pelo usuário; os minutos já registrados estão no "
             "manifest da sessão"
+        ) from falha
+    except typer.Exit:
+        raise
+    except Exception as falha:  # noqa: BLE001 — nenhuma falha crua chega ao usuário
+        raise _erro(str(falha) or type(falha).__name__) from falha
+    finally:
+        sinal.restaurar()
+
+    typer.echo(f"Sessão:            {estado.id_sessao}")
+    if estado.status is not None:
+        typer.echo(f"Status:            {estado.status}")
+
+    if estado.fase is Fase.CONCLUIDA:
+        typer.echo(f"Planilha:          {estado.planilha}")
+        with conectar_ao_banco(data_dir) as conexao:
+            aviso = linha_de_aviso(ler_sessao(conexao, estado.id_sessao))
+        if aviso is not None:
+            typer.echo(aviso)
+        return
+
+    if estado.fase is Fase.PROCESSAMENTO_CANCELADO:
+        typer.echo(estado.mensagem)
+        return
+
+    raise _erro(estado.mensagem or "a sessão terminou sem planilha")
+
+
+@session_app.command("upload")
+def enviar_videos(
+    id_camera: str = typer.Argument(
+        ..., metavar="ID", help="Id da câmera, como no registro (ex.: 000013)."
+    ),
+    arquivos: list[Path] = typer.Argument(
+        ..., metavar="ARQUIVO...", help="Um ou mais vídeos a contar, na ordem."
+    ),
+    nome: list[str] | None = typer.Option(
+        None,
+        "--nome",
+        hidden=True,
+        help="Nome original de cada arquivo, na mesma ordem (só a interface usa).",
+    ),
+    config_dir: Path = OPCAO_CONFIG_DIR,
+) -> None:
+    """Conta vídeos enviados como uma sessão e exporta o XLSX (AC-030.7).
+
+    É o mesmo comando que a interface dispara em segundo plano para a fonte
+    "Fazer upload de vídeos". Usa os padrões de processamento (sem
+    `--threshold`, `--sample-rate` nem `--keep-clips`: a cópia recebida é apagada
+    ao fim da sessão concluída, SUP-097) e não inicia a interface web.
+
+    A ordem é a de D-13: a câmera do registro e a triagem dos arquivos
+    (existência, extensão e tamanho) vêm antes da trava de sessão única
+    (AC-028.2); só depois entram a leitura de cada vídeo, a resolução da câmera
+    e o limite de 15 min somados. Toda recusa nomeia o arquivo. Duplicata só
+    avisa em `stderr`. Ctrl+C no processamento o cancela: nada é gravado e os
+    vídeos ficam para `session process` (AC-029.1).
+    """
+    nomes = list(nome) if nome else [arquivo.name for arquivo in arquivos]
+    if len(nomes) != len(arquivos):
+        raise _erro(
+            f"--nome foi dado {len(nomes)} vez(es) para {len(arquivos)} "
+            "arquivo(s); passe um --nome por arquivo, na mesma ordem"
+        )
+
+    registro = _carrega(config_dir)
+    escolhida = _camera_do_registro(registro, id_camera, config_dir)
+    try:
+        triar_arquivos(arquivos, nomes)
+    except ValueError as falha:
+        raise _erro(str(falha)) from falha
+
+    data_dir = _data_dir()
+    sinal = _ParadaPorSinal(data_dir)
+
+    def avisar(mensagem: str) -> None:
+        typer.secho(f"aviso: {mensagem}", err=True, fg=typer.colors.YELLOW)
+
+    try:
+        with _trava(data_dir, "upload", escolhida):
+            estado = executar_upload(
+                escolhida,
+                arquivos,
+                nomes,
+                data_dir=data_dir,
+                agora=_agora,
+                criar_detector=lambda caminho, config: _detector(caminho, config),
+                criar_parada=sinal.nova,
+                ao_avisar=avisar,
+            )
+    except OutraSessaoEmAndamentoError as falha:
+        raise _erro(str(falha)) from falha
+    except KeyboardInterrupt as falha:
+        raise _erro(
+            "sessão abortada pelo usuário; os vídeos recebidos ficam em "
+            "sessions/ para `session process`"
         ) from falha
     except typer.Exit:
         raise

@@ -101,6 +101,7 @@ def executar_upload(
     criar_detector: Callable[[Path, ConfiguracaoDoProcessamento], DetectorDoClipe],
     criar_parada: Callable[[], ParadaDoProcessamento],
     pid: int | None = None,
+    ao_avisar: Callable[[str], None] | None = None,
 ) -> EstadoDaSessao:
     """Roda a sessão de upload da validação à planilha e devolve o estado final.
 
@@ -108,6 +109,9 @@ def executar_upload(
     originais, que o arquivo em `envios/` não guarda. A ordem dos efeitos é a de
     D-13: modelo, validação, preparo do diretório, contagem, persistência,
     descarte dos vídeos e planilha.
+
+    `ao_avisar` recebe cada aviso da validação (a duplicata, SUP-098), que não
+    impede a sessão; o comando o imprime em `stderr`.
     """
     data_dir = Path(data_dir)
     consumir_pedido(data_dir)
@@ -127,6 +131,10 @@ def executar_upload(
         provisorio.terminar(Fase.FALHOU, mensagem=str(falha) or type(falha).__name__)
         consumir_pedido(data_dir)
         raise
+
+    for aviso in validacao.avisos:
+        if ao_avisar is not None:
+            ao_avisar(aviso)
 
     minutos = numerar_minutos(
         [leitura.duracao_segundos or 0 for leitura in validacao.leituras]
