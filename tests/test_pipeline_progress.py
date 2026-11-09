@@ -29,6 +29,7 @@ from auto_counter.pipeline.progress import (
     ler_progresso,
 )
 from auto_counter.pipeline.state import AnotadorDoEstado, ClipeMantido, Fase
+from auto_counter.storage import schema
 from auto_counter.storage.connection import caminho_do_banco, conectar
 from tests.export_helpers import ID_SESSAO, evento, gravar_sessao
 from tests.test_pipeline_lock import grava_trava
@@ -838,6 +839,30 @@ def test_AC_023_2_concluida_sem_encerramento_pelo_usuario_nao_traz_a_marca(tmp_p
 
 def test_AC_023_2_banco_ilegivel_da_registros_none_sem_falhar(tmp_path):
     caminho_do_banco(tmp_path).write_bytes(b"isto nao e um banco sqlite" * 50)
+    concluida(tmp_path)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.registros is None
+    assert resultado.encerrada_pelo_usuario is False
+
+
+def test_AC_023_2_banco_em_schema_antigo_da_registros_none_sem_falhar(
+    tmp_path, monkeypatch
+):
+    # A leitura é somente leitura e não migra: um banco que nenhuma gravação
+    # levou à versão atual (sem `sessao.origem`) conta como ilegível.
+    monkeypatch.setattr(
+        schema, "MIGRATIONS", {1: schema.MIGRATIONS[1], 2: schema.MIGRATIONS[2]}
+    )
+    with conectar(tmp_path) as conexao:
+        conexao.execute(
+            "INSERT INTO sessao (id_sessao, id_camera, criada_em, duracao_pedida) "
+            "VALUES (?, ?, ?, ?)",
+            (ID_SESSAO, "000013", INICIO.isoformat(), 2),
+        )
+        conexao.commit()
+    monkeypatch.undo()
     concluida(tmp_path)
 
     resultado = ler_progresso(tmp_path).resultado

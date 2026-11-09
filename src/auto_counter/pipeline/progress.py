@@ -440,7 +440,10 @@ def _sessao_do_banco(
 ) -> tuple[SessaoGravada, int] | None:
     """A sessão e o número dos seus eventos, na mesma conexão somente leitura.
 
-    `None` se o banco não existe, não abre ou não tem a sessão (D-8).
+    `None` se o banco não existe, não abre ou não tem a sessão (D-8). Também
+    se o schema está numa versão anterior à atual: a conexão é somente
+    leitura e não aplica migrations, e `sqlite3.Row` levanta `IndexError` na
+    coluna que falta.
     """
     caminho = caminho_do_banco(data_dir)
     if id_sessao is None or not caminho.is_file():
@@ -453,7 +456,7 @@ def _sessao_do_banco(
             return sessao, contar_eventos(conexao, id_sessao)
         finally:
             conexao.close()
-    except (sqlite3.Error, KeyError):
+    except (sqlite3.Error, KeyError, IndexError):
         return None
 
 
