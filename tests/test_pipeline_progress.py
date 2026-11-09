@@ -1280,3 +1280,214 @@ def test_ler_progresso_nao_abre_o_manifest_ao_listar_clipes(tmp_path, monkeypatc
     resultado = ler_progresso(tmp_path).resultado
 
     assert [c.minuto for c in resultado.clipes] == [1]
+
+
+# --- processamento-upload: progresso da sessão de upload (D-11) ---
+
+from auto_counter.pipeline.state import SituacaoDoVideo  # noqa: E402
+
+
+def anotador_de_upload(data_dir, nomes=("a.mp4", "b.mp4", "c.mov"), minutos=4, **extra):
+    return AnotadorDoEstado(
+        data_dir,
+        pid=extra.pop("pid", os.getpid()),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=minutos,
+        iniciada_em=INICIO,
+        origem="UPLOAD",
+        videos=nomes,
+        **extra,
+    )
+
+
+def trava_do_upload(data_dir):
+    return adquirir_trava(
+        data_dir,
+        comando="upload",
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        agora=lambda: INICIO,
+    )
+
+
+def test_AC_028_3_titulo_e_contagem_video_k_de_n(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.video_terminado(1, SituacaoDoVideo.CONCLUIDO)
+    a.video_iniciado(2)
+
+    with trava_do_upload(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.titulo == "Contagem · vídeo 2/3"
+    assert andamento.origem == "UPLOAD"
+    assert [(v.nome, v.estado) for v in andamento.videos] == [
+        ("a.mp4", "concluído"),
+        ("b.mp4", "processando"),
+        ("c.mov", "fila"),
+    ]
+
+
+def test_AC_028_3_k_antes_do_primeiro_video_e_1(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+
+    with trava_do_upload(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.titulo == "Contagem · vídeo 1/3"
+
+
+def test_AC_028_3_k_entre_dois_videos_e_o_do_ultimo_que_saiu_da_fila(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.video_terminado(1, SituacaoDoVideo.CONCLUIDO)
+    a.video_iniciado(2)
+    a.video_terminado(2, SituacaoDoVideo.FALHOU)
+
+    with trava_do_upload(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.titulo == "Contagem · vídeo 2/3"
+
+
+def test_AC_028_3_rotulos_dos_cinco_estados(tmp_path):
+    a = anotador_de_upload(tmp_path, nomes=("1", "2", "3", "4", "5"), minutos=5)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.video_terminado(1, SituacaoDoVideo.CONCLUIDO)
+    a.video_iniciado(2)
+    a.video_terminado(2, SituacaoDoVideo.FALHOU)
+    a.video_iniciado(3)
+    a.video_terminado(3, SituacaoDoVideo.INTERROMPIDO)
+    a.video_iniciado(4)
+
+    with trava_do_upload(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert [v.estado for v in andamento.videos] == [
+        "concluído",
+        "falhou",
+        "interrompido",
+        "processando",
+        "fila",
+    ]
+
+
+def test_AC_028_10_quantidades_e_tempos_reencontrados_ao_reler_o_disco(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.minuto_iniciado()
+    a.evento_aceito(1, Categoria.CARRO)
+    a.evento_aceito(1, Categoria.MOTO)
+    a.minuto_processado()
+    agora = INICIO + timedelta(seconds=95)
+
+    with trava_do_upload(tmp_path):
+        primeira = ler_progresso(tmp_path, agora=agora).andamento
+        segunda = ler_progresso(tmp_path, agora=agora).andamento
+
+    assert primeira == segunda
+    assert primeira.quantidades.total == 2
+    assert primeira.tempo_decorrido == 95
+    assert (primeira.processados, primeira.a_processar) == (1, 4)
+
+
+def test_AC_028_10_tempo_estimado_do_upload_segue_AC_022_6(tmp_path):
+    a = anotador_de_upload(
+        tmp_path,
+        nomes=("a.mp4",),
+        agora=lambda: INICIO + timedelta(seconds=100),
+    )
+    a.iniciar()
+    a.video_iniciado(1)
+    a.minuto_iniciado()
+    a.minuto_processado()
+    a.minuto_iniciado()  # Tm = INICIO + 100 s
+
+    with trava_do_upload(tmp_path):
+        andamento = ler_progresso(
+            tmp_path, agora=INICIO + timedelta(seconds=130)
+        ).andamento
+
+    # M = 4, P = 1, Tm há 30 s: max(2 x 80, 3 x 80 - 30) = 210.
+    assert andamento.tempo_estimado == 210
+
+
+def test_AC_029_2_estado_cancelado_traz_interrompido_concluido_e_fila(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.video_terminado(1, SituacaoDoVideo.CONCLUIDO)
+    a.video_iniciado(2)
+    a.video_terminado(2, SituacaoDoVideo.INTERROMPIDO)
+    a.terminar(Fase.PROCESSAMENTO_CANCELADO, mensagem="cancelado")
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.PROCESSAMENTO_CANCELADO
+    assert resultado.origem == "UPLOAD"
+    assert [(v.nome, v.estado) for v in resultado.videos] == [
+        ("a.mp4", "concluído"),
+        ("b.mp4", "interrompido"),
+        ("c.mov", "fila"),
+    ]
+
+
+def test_D_11_processo_morto_mostra_o_video_em_curso_como_interrompido(tmp_path):
+    pid, _ = pid_morto()
+    a = anotador_de_upload(tmp_path, nomes=("a.mp4", "b.mp4"), pid=pid)
+    a.iniciar()
+    a.video_iniciado(1)
+    antes = instantaneo(tmp_path)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.FALHOU
+    assert resultado.mensagem == MENSAGEM_PROCESSO_MORREU
+    assert [v.estado for v in resultado.videos] == ["interrompido", "fila"]
+    assert instantaneo(tmp_path) == antes  # nada foi gravado
+
+
+def test_AC_028_2_trava_do_upload_e_acompanhada_pela_interface(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+
+    with trava_do_upload(tmp_path):
+        progresso = ler_progresso(tmp_path)
+
+    assert progresso.situacao is Situacao.EM_ANDAMENTO
+    assert progresso.andamento is not None
+
+
+def test_trava_de_process_continua_pelo_terminal(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+
+    with adquirir_trava(
+        tmp_path,
+        comando="process",
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        agora=lambda: INICIO,
+    ):
+        progresso = ler_progresso(tmp_path)
+
+    assert progresso.situacao is Situacao.EM_ANDAMENTO_PELO_TERMINAL
+    assert progresso.andamento is None
+
+
+def test_titulo_da_sessao_ao_vivo_continua_contagem_ao_vivo_com_o_nome(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.titulo == "Contagem ao vivo · Praça Exemplo"
+    assert andamento.origem == "CAMERA"
+    assert andamento.videos == ()

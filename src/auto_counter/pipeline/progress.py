@@ -31,6 +31,10 @@ SUP-077, duração e tamanho), quantos dos gravados no estado já não estão l�
 os clipes do estado, antes de filtrar os ausentes (D-3), para que um clipe
 não mude de nome porque outro sumiu. A presença e o tamanho são lidos agora,
 no disco; nada é gravado, e o `manifest.json` não é aberto.
+
+Por `processamento-upload` (D-11), o andamento e o resultado também trazem a
+origem, o título do painel e o estado de cada vídeo da sessão de upload, já com
+os rótulos da tela. A trava de `upload` é acompanhada como a de `run`.
 """
 
 import sqlite3
@@ -47,7 +51,13 @@ from auto_counter.pipeline.lock import (
     ler_trava,
     mensagem_de_sessao_em_andamento,
 )
-from auto_counter.pipeline.state import ClipeMantido, EstadoDaSessao, Fase, ler_estado
+from auto_counter.pipeline.state import (
+    ClipeMantido,
+    EstadoDaSessao,
+    Fase,
+    SituacaoDoVideo,
+    ler_estado,
+)
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.model import SessaoGravada
@@ -67,6 +77,56 @@ TAXA_SEM_DADO = "— veíc/min"
 
 MENSAGEM_PROCESSO_MORREU = "o processo da sessão terminou sem concluir"
 """D-9: estado não terminal sem trava viva é um processo que morreu."""
+
+
+ROTULO_DO_VIDEO = {
+    SituacaoDoVideo.FILA: "fila",
+    SituacaoDoVideo.PROCESSANDO: "processando",
+    SituacaoDoVideo.CONCLUIDO: "concluído",
+    SituacaoDoVideo.FALHOU: "falhou",
+    SituacaoDoVideo.INTERROMPIDO: "interrompido",
+}
+"""Os rótulos da tela para cada situação de vídeo (D-11)."""
+
+
+@dataclass(frozen=True)
+class VideoNaTela:
+    """Um vídeo da sessão de upload, com o rótulo pronto para exibir."""
+
+    nome: str
+    estado: str
+
+
+def _videos_na_tela(
+    estado: EstadoDaSessao, *, interromper_em_curso: bool = False
+) -> tuple[VideoNaTela, ...]:
+    """Os vídeos com rótulo. Sem trava viva, o em curso vira "interrompido"."""
+    rotulos = []
+    for video in estado.videos:
+        situacao = video.situacao
+        if interromper_em_curso and situacao is SituacaoDoVideo.PROCESSANDO:
+            situacao = SituacaoDoVideo.INTERROMPIDO
+        rotulos.append(VideoNaTela(video.nome, ROTULO_DO_VIDEO[situacao]))
+    return tuple(rotulos)
+
+
+def _titulo(estado: EstadoDaSessao) -> str:
+    """O título do painel ao vivo (AC-028.3, D-11)."""
+    if estado.origem != "UPLOAD":
+        return f"Contagem ao vivo · {estado.nome_camera or estado.id_camera}"
+    posicoes = [
+        posicao
+        for posicao, video in enumerate(estado.videos, start=1)
+        if video.situacao is SituacaoDoVideo.PROCESSANDO
+    ]
+    if not posicoes:
+        posicoes = [
+            posicao
+            for posicao, video in enumerate(estado.videos, start=1)
+            if video.situacao is not SituacaoDoVideo.FILA
+        ]
+    k = max(posicoes) if posicoes else 1
+    return f"Contagem · vídeo {k}/{len(estado.videos)}"
 
 
 class Situacao(Enum):
@@ -194,6 +254,11 @@ class Andamento:
     tempo_estimado: int | None
     """Segundos até o fim da sessão (AC-022.5, AC-022.6); `None` no
     processamento sem o instante Tm (estado de versão anterior)."""
+    titulo: str = ""
+    """O título do painel ao vivo (AC-028.3, D-11)."""
+    origem: str = "CAMERA"
+    videos: tuple[VideoNaTela, ...] = ()
+    """Só no upload: nome e rótulo do estado de cada vídeo (AC-028.3)."""
 
 
 @dataclass(frozen=True)
@@ -293,6 +358,9 @@ class Resultado:
     """Clipes gravados no estado que já não estão em disco (AC-025.5)."""
     titulo_dos_clipes: str | None = None
     """`"Clipes · k arquivos · X MB"` (D-5), ou `None` sem clipe presente."""
+    origem: str = "CAMERA"
+    videos: tuple[VideoNaTela, ...] = ()
+    """Só no upload: o estado final de cada vídeo (AC-029.2)."""
 
 
 @dataclass(frozen=True)
@@ -361,6 +429,9 @@ def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
         participacoes=None if na_captura else _participacoes(quantidades),
         taxa=taxa,
         tempo_estimado=_tempo_estimado(estado, agora),
+        titulo=_titulo(estado),
+        origem=estado.origem,
+        videos=_videos_na_tela(estado),
     )
 
 
@@ -403,6 +474,8 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             chave=chave,
             nome_camera=estado.nome_camera,
             id_camera=estado.id_camera,
+            origem=estado.origem,
+            videos=_videos_na_tela(estado, interromper_em_curso=True),
         )
 
     tempo_total = (
@@ -422,6 +495,8 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             tempo_total=tempo_total,
             nome_camera=estado.nome_camera,
             id_camera=estado.id_camera,
+            origem=estado.origem,
+            videos=_videos_na_tela(estado),
         )
 
     do_banco = _sessao_do_banco(data_dir, estado.id_sessao)
@@ -462,6 +537,8 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         clipes=clipes,
         clipes_ausentes=clipes_ausentes,
         titulo_dos_clipes=titulo_dos_clipes,
+        origem=estado.origem,
+        videos=_videos_na_tela(estado),
     )
 
 
@@ -471,7 +548,9 @@ def _com_trava_viva(
     """O progresso de uma sessão em curso, ou `None` se o estado já terminou."""
     recusa = mensagem_de_sessao_em_andamento(info)
     do_run = (
-        info.comando == "run" and estado is not None and estado.pid == info.pid
+        info.comando in ("run", "upload")
+        and estado is not None
+        and estado.pid == info.pid
     )
     if not do_run:
         # D-15: iniciada pelo terminal (ou sem estado do mesmo processo). Não há

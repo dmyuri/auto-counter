@@ -556,3 +556,130 @@ def test_last_modified_sem_fuso_e_recusado():
             last_modified=datetime(2026, 11, 8, 8, 0),
             duracao_segundos=None,
         )
+
+
+# --- processamento-upload: estado da sessão de upload (D-11, D-12) ---
+
+from auto_counter.pipeline.state import (  # noqa: E402
+    SituacaoDoVideo,
+    VideoNoEstado,
+)
+
+
+def anotador_de_upload(data_dir, nomes=("a.mp4", "b.mp4", "c.mov"), minutos=5):
+    return AnotadorDoEstado(
+        data_dir,
+        pid=4242,
+        id_camera="000013",
+        nome_camera="Praça Renascença",
+        duracao_pedida=minutos,
+        iniciada_em=INICIO,
+        origem="UPLOAD",
+        videos=nomes,
+    )
+
+
+def test_AC_028_3_upload_nasce_em_processamento_com_todos_em_fila_e_zeros(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+
+    estado = ler_estado(tmp_path)
+
+    assert estado.origem == "UPLOAD"
+    assert estado.fase is Fase.PROCESSAMENTO
+    assert estado.duracao_pedida == 5
+    assert estado.minutos_a_processar == 5
+    assert estado.minutos_processados == 0
+    assert estado.quantidades == {categoria.value: 0 for categoria in Categoria}
+    assert estado.videos == (
+        VideoNoEstado("a.mp4", SituacaoDoVideo.FILA),
+        VideoNoEstado("b.mp4", SituacaoDoVideo.FILA),
+        VideoNoEstado("c.mov", SituacaoDoVideo.FILA),
+    )
+
+
+def test_AC_028_3_no_maximo_um_video_processando(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+
+    with pytest.raises(ValueError):
+        a.video_iniciado(2)
+
+    a.video_terminado(1, SituacaoDoVideo.CONCLUIDO)
+    a.video_iniciado(2)
+    situacoes = [v.situacao for v in ler_estado(tmp_path).videos]
+    assert situacoes == [
+        SituacaoDoVideo.CONCLUIDO,
+        SituacaoDoVideo.PROCESSANDO,
+        SituacaoDoVideo.FILA,
+    ]
+
+
+def test_AC_028_3_video_terminado_so_aceita_concluido_falhou_ou_interrompido(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+
+    with pytest.raises(ValueError):
+        a.video_terminado(1, SituacaoDoVideo.FILA)
+    with pytest.raises(ValueError):
+        a.video_terminado(1, SituacaoDoVideo.PROCESSANDO)
+
+    a.video_terminado(1, SituacaoDoVideo.FALHOU)
+    assert ler_estado(tmp_path).videos[0].situacao is SituacaoDoVideo.FALHOU
+
+
+def test_AC_016_8_minuto_sem_dado_nao_entra_na_taxa(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.minuto_iniciado()
+    a.evento_aceito(1, Categoria.CARRO)
+    a.minuto_descartado(1)
+    a.minuto_processado()
+    a.minuto_sem_dado()
+
+    estado = ler_estado(tmp_path)
+    assert estado.minutos_processados == 2
+    assert estado.minutos_com_dado == 0
+    assert estado.veiculos_nos_minutos_com_dado == 0
+    assert estado.quantidades[Categoria.CARRO.value] == 0
+
+
+def test_AC_016_8_minuto_sem_dado_nao_soma_nos_minutos_com_dado(tmp_path):
+    a = anotador_de_upload(tmp_path)
+    a.iniciar()
+    a.minuto_iniciado()
+    a.evento_aceito(1, Categoria.CARRO)
+    a.minuto_processado()
+    a.minuto_sem_dado()
+
+    estado = ler_estado(tmp_path)
+    assert (estado.minutos_com_dado, estado.veiculos_nos_minutos_com_dado) == (1, 1)
+    assert estado.minutos_processados == 2
+
+
+def test_estado_de_versao_anterior_e_lido_como_camera_sem_videos(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+    caminho = tmp_path / NOME_DO_ESTADO
+    dados = json.loads(caminho.read_text(encoding="utf-8"))
+    del dados["origem"]
+    del dados["videos"]
+    caminho.write_text(json.dumps(dados), encoding="utf-8")
+
+    estado = ler_estado(tmp_path)
+
+    assert estado.origem == "CAMERA"
+    assert estado.videos == ()
+
+
+def test_sessao_ao_vivo_continua_em_captura_sem_videos(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+
+    estado = ler_estado(tmp_path)
+    assert estado.fase is Fase.CAPTURA
+    assert estado.origem == "CAMERA"
+    assert estado.videos == ()

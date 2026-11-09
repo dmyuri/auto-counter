@@ -33,13 +33,17 @@ essa escolha ligada, a lista dos clipes capturados (`clipes`). Quem conhece os
 clipes é o processo da sessão, não a interface: é por isso que eles entram
 aqui, em vez de a tela abrir o `manifest.json` (D-9). Arquivo de versão
 anterior não tem os dois campos e é lido com `False` e `None`.
+
+Por `processamento-upload` (D-11), o arquivo também carrega a origem da sessão
+(`origem`, `CAMERA` ou `UPLOAD`) e, no upload, o estado de cada vídeo
+(`videos`). Arquivo de versão anterior é lido com `"CAMERA"` e `()`.
 """
 
 import json
 import os
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime, timezone
 from enum import Enum
@@ -54,6 +58,24 @@ TENTATIVAS_DE_GRAVACAO = 5
 ESPERA_ENTRE_TENTATIVAS = 0.05
 """No Windows, trocar um arquivo que um leitor tem aberto levanta
 `PermissionError` por instantes; algumas tentativas curtas bastam."""
+
+
+class SituacaoDoVideo(Enum):
+    """O estado de um vídeo da sessão de upload (AC-028.3, SUP-089)."""
+
+    FILA = "FILA"
+    PROCESSANDO = "PROCESSANDO"
+    CONCLUIDO = "CONCLUIDO"
+    FALHOU = "FALHOU"
+    INTERROMPIDO = "INTERROMPIDO"
+
+
+@dataclass(frozen=True)
+class VideoNoEstado:
+    """Um vídeo da sessão de upload, pelo nome original e pela situação."""
+
+    nome: str
+    situacao: SituacaoDoVideo
 
 
 class Fase(Enum):
@@ -109,6 +131,10 @@ class EstadoDaSessao:
     """A escolha feita ao iniciar (SUP-080, D-1)."""
     clipes: "tuple[ClipeMantido, ...] | None" = None
     """Só no desfecho `CONCLUIDA` com `manter_videos` (D-1); `None` até lá."""
+    origem: str = "CAMERA"
+    """`CAMERA` ou `UPLOAD` (processamento-upload, D-11)."""
+    videos: tuple[VideoNoEstado, ...] = ()
+    """Só no upload: os vídeos na ordem da lista, com a situação de cada um."""
 
 
 @dataclass(frozen=True)
@@ -189,6 +215,11 @@ def _como_dicionario(estado: EstadoDaSessao) -> dict:
                 for clipe in estado.clipes
             ]
         ),
+        "origem": estado.origem,
+        "videos": [
+            {"nome": video.nome, "situacao": video.situacao.value}
+            for video in estado.videos
+        ],
     }
 
 
@@ -260,6 +291,16 @@ def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
             # (download-clipes, SUP-080): valem `False` e `None`.
             manter_videos=bool(dados.get("manter_videos", False)),
             clipes=_ler_clipes(dados.get("clipes")),
+            # Arquivo de versão anterior não tem os dois campos abaixo
+            # (processamento-upload, D-11): valem "CAMERA" e `()`.
+            origem=str(dados.get("origem", "CAMERA")),
+            videos=tuple(
+                VideoNoEstado(
+                    nome=str(item["nome"]),
+                    situacao=SituacaoDoVideo(item["situacao"]),
+                )
+                for item in dados.get("videos", [])
+            ),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -283,6 +324,8 @@ class AnotadorDoEstado:
         iniciada_em: datetime,
         agora: Callable[[], datetime] = lambda: datetime.now(timezone.utc),
         manter_videos: bool = False,
+        origem: str = "CAMERA",
+        videos: Sequence[str] = (),
     ) -> None:
         self._data_dir = Path(data_dir)
         self._agora = agora
@@ -291,6 +334,23 @@ class AnotadorDoEstado:
         self._do_minuto: dict[str, int] = {}
         # O minuto em curso foi descartado? (D-3) Só em memória.
         self._minuto_descartado = False
+        if origem == "UPLOAD":
+            # A sessão de upload nasce no processamento, sem captura (D-11).
+            self._estado = EstadoDaSessao(
+                pid=pid,
+                id_camera=id_camera,
+                nome_camera=nome_camera,
+                duracao_pedida=duracao_pedida,
+                iniciada_em=_em_utc(iniciada_em),
+                fase=Fase.PROCESSAMENTO,
+                minutos_a_processar=duracao_pedida,
+                quantidades={categoria.value: 0 for categoria in Categoria},
+                origem=origem,
+                videos=tuple(
+                    VideoNoEstado(nome, SituacaoDoVideo.FILA) for nome in videos
+                ),
+            )
+            return
         self._estado = EstadoDaSessao(
             pid=pid,
             id_camera=id_camera,
@@ -378,6 +438,50 @@ class AnotadorDoEstado:
             )
         self._minuto_descartado = False
         self._estado = replace(self._estado, **mudancas)
+        self._gravar()
+
+    def minuto_sem_dado(self) -> None:
+        """Conta um minuto resolvido sem dado (AC-028.9, AC-016.8).
+
+        Soma em `minutos_processados` e não em `minutos_com_dado` nem em V.
+        """
+        self._do_minuto = {}
+        self._minuto_descartado = False
+        self._estado = replace(
+            self._estado, minutos_processados=self._estado.minutos_processados + 1
+        )
+        self._gravar()
+
+    def video_iniciado(self, posicao: int) -> None:
+        """Marca o vídeo como `PROCESSANDO`; no máximo um por vez (AC-028.3)."""
+        if any(
+            video.situacao is SituacaoDoVideo.PROCESSANDO
+            for video in self._estado.videos
+        ):
+            raise ValueError(
+                f"já há um vídeo em processamento; o vídeo {posicao} não pode "
+                f"começar (AC-028.3)"
+            )
+        self._situacao_do_video(posicao, SituacaoDoVideo.PROCESSANDO)
+
+    def video_terminado(self, posicao: int, situacao: SituacaoDoVideo) -> None:
+        """Grava o desfecho do vídeo: concluído, falhou ou interrompido."""
+        if situacao not in (
+            SituacaoDoVideo.CONCLUIDO,
+            SituacaoDoVideo.FALHOU,
+            SituacaoDoVideo.INTERROMPIDO,
+        ):
+            raise ValueError(f"{situacao.value} não é um desfecho de vídeo")
+        self._situacao_do_video(posicao, situacao)
+
+    def _situacao_do_video(self, posicao: int, situacao: SituacaoDoVideo) -> None:
+        if not 1 <= posicao <= len(self._estado.videos):
+            raise ValueError(
+                f"vídeo {posicao} fora da lista de {len(self._estado.videos)}"
+            )
+        videos = list(self._estado.videos)
+        videos[posicao - 1] = replace(videos[posicao - 1], situacao=situacao)
+        self._estado = replace(self._estado, videos=tuple(videos))
         self._gravar()
 
     def terminar(
