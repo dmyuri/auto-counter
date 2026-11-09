@@ -36,8 +36,12 @@ from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
 NOME_DO_ARQUIVO_DE_EVENTOS = "eventos.json"
 """Nome do arquivo dentro do diretório da sessão (D-1)."""
 
-VERSAO_DOS_EVENTOS = 1
+VERSAO_DOS_EVENTOS = 2
 """Versão do formato gravado.
+
+A versão 2 acrescentou `video`, `deslocamento_segundos` e
+`frames_por_segundo` (SUP-100 e SUP-090, `processamento-upload`); a 1 continua
+legível, com os padrões.
 
 Mesmo motivo do `manifest.json`: sem um número de versão, uma mudança futura de
 formato seria indistinguível de um arquivo corrompido para quem lê depois —
@@ -102,10 +106,31 @@ class Evento:
     minuto: int
     indice_do_frame: int
     posicao_na_linha: float
+    video: int | None = None
+    """Posição do vídeo na lista, a partir de 1 (sessão de upload, SUP-100)."""
+    deslocamento_segundos: int | None = None
+    """Segundos desde o início do vídeo; `None` junto de `video` (SUP-100)."""
 
     def __post_init__(self) -> None:
         """Recusa o que não poderia ser gravado nem relido sem ambiguidade."""
         object.__setattr__(self, "timestamp", _em_utc(self.timestamp))
+
+        if (self.video is None) != (self.deslocamento_segundos is None):
+            raise ValueError(
+                f"video ({self.video}) e deslocamento_segundos "
+                f"({self.deslocamento_segundos}) são preenchidos juntos ou "
+                f"ficam os dois vazios (SUP-100)"
+            )
+        if self.video is not None and self.video < 1:
+            raise ValueError(
+                f"video é a posição na lista, a partir de 1, e não {self.video} "
+                f"(SUP-100)"
+            )
+        if self.deslocamento_segundos is not None and self.deslocamento_segundos < 0:
+            raise ValueError(
+                f"deslocamento_segundos não pode ser negativo, e não "
+                f"{self.deslocamento_segundos} (SUP-100)"
+            )
 
         if not 0.0 <= self.confianca <= 1.0:
             raise ValueError(
@@ -130,6 +155,8 @@ class Evento:
             "minuto": self.minuto,
             "indice_do_frame": self.indice_do_frame,
             "posicao_na_linha": self.posicao_na_linha,
+            "video": self.video,
+            "deslocamento_segundos": self.deslocamento_segundos,
         }
 
     @classmethod
@@ -144,6 +171,8 @@ class Evento:
             minuto=dados["minuto"],
             indice_do_frame=dados["indice_do_frame"],
             posicao_na_linha=dados["posicao_na_linha"],
+            video=dados.get("video"),
+            deslocamento_segundos=dados.get("deslocamento_segundos"),
         )
 
 
@@ -221,6 +250,7 @@ class RegistroDeEventos:
                     self.configuracao.janela_de_emenda_em_segundos
                 ),
                 "tolerancia_da_assinatura": self.configuracao.tolerancia_da_assinatura,
+                "frames_por_segundo": self.configuracao.frames_por_segundo,
                 "versao_do_modelo": self.versao_do_modelo,
             },
             "minutos_processados": list(self.minutos_processados),
@@ -284,6 +314,9 @@ def ler(dir_sessao: str | Path) -> RegistroDeEventos:
             tamanho_de_entrada=configuracao["tamanho_de_entrada"],
             janela_de_emenda_em_segundos=configuracao["janela_de_emenda_em_segundos"],
             tolerancia_da_assinatura=configuracao["tolerancia_da_assinatura"],
+            frames_por_segundo=configuracao.get(
+                "frames_por_segundo", ConfiguracaoDoProcessamento().frames_por_segundo
+            ),
         ),
         versao_do_modelo=configuracao["versao_do_modelo"],
         minutos_processados=tuple(dados["minutos_processados"]),
