@@ -3,13 +3,17 @@
 Comportamento em `.spec/features/exportacao-xlsx/spec.md`: AC-010.1 e AC-010.5
 (nome do arquivo e aviso), SUP-032 (padrão do nome) e SUP-033 (horário de
 Brasília). Funções puras: sem `openpyxl` e sem banco.
+
+Por `processamento-upload` (AC-030.3, AC-030.4, D-10), a sessão de upload leva
+`_upload` antes do sufixo de status no nome, e o aviso fala em minutos sem dado
+por falha de leitura. O nome e o aviso da sessão ao vivo não mudam.
 """
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from auto_counter.capture.status import StatusDaSessao
-from auto_counter.storage.model import SessaoGravada
+from auto_counter.storage.model import OrigemDaSessao, SessaoGravada
 
 FUSO = ZoneInfo("America/Sao_Paulo")
 """D-9: fuso IANA, e não offset fixo de -03:00."""
@@ -46,6 +50,12 @@ def linha_de_aviso(sessao: SessaoGravada) -> str | None:
     if sessao.status in (None, StatusDaSessao.COMPLETA):
         return None
     percentual = f"{percentual_perdido(sessao):.1f}".replace(".", ",")
+    if sessao.origem is OrigemDaSessao.UPLOAD:
+        return (
+            f"ATENÇÃO: sessão {sessao.status.value} — "
+            f"{len(sessao.minutos_perdidos)} de {sessao.duracao_real} minutos "
+            f"sem dado por falha de leitura ({percentual}%)"
+        )
     return (
         f"ATENÇÃO: sessão {sessao.status.value} — "
         f"{len(sessao.minutos_perdidos)} de {sessao.duracao_real} minutos "
@@ -69,6 +79,8 @@ def nome_do_arquivo(sessao: SessaoGravada) -> str:
         f"{sessao.id_camera}_{inicio:%Y%m%d}_{inicio:%H%M}_"
         f"{sessao.duracao_real}min"
     )
+    if sessao.origem is OrigemDaSessao.UPLOAD:
+        nome += "_upload"
     if sessao.status is not StatusDaSessao.COMPLETA:
         nome += f"_{sessao.status.value}"
     return f"{nome}.xlsx"

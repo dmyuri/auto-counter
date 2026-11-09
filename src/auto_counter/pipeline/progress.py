@@ -62,6 +62,7 @@ from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.model import SessaoGravada
 from auto_counter.storage.sessions import ler_sessao
+from auto_counter.tempo import formatar_tempo  # noqa: F401 (reexportada)
 
 ORCAMENTO_POR_MINUTO_EM_SEGUNDOS = 80
 """Orçamento de processamento por minuto de vídeo (SUP-070).
@@ -199,12 +200,6 @@ def _percentual(resolvidos: int, total: int) -> int:
     if total <= 0:
         return 0
     return (100 * resolvidos) // total
-
-
-def formatar_tempo(segundos: int) -> str:
-    """MM:SS, com os minutos passando de 59 sem virar hora (SUP-057)."""
-    minutos, resto = divmod(int(segundos), 60)
-    return f"{minutos:02d}:{resto:02d}"
 
 
 def _quantidades(estado: EstadoDaSessao) -> Quantidades | None:

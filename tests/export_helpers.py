@@ -10,11 +10,13 @@ from auto_counter.capture.status import StatusDaSessao
 from auto_counter.counting.config import Categoria
 from auto_counter.counting.events import Evento, MinutoNaoProcessado
 from auto_counter.storage.events import gravar_eventos
+from auto_counter.storage.model import OrigemDaSessao, VideoGravado
 from auto_counter.storage.minutes import agregar, gravar_agregados
 from auto_counter.storage.sessions import (
     abrir_sessao,
     completar_processamento,
     fechar_captura,
+    gravar_videos,
 )
 
 ID_SESSAO = "000013-20260907T110000Z"
@@ -34,6 +36,8 @@ def evento(
     categoria: Categoria = Categoria.CARRO,
     confianca: float = 0.9,
     segundos: int = 10,
+    video: int | None = None,
+    deslocamento: int | None = None,
 ) -> Evento:
     return Evento(
         timestamp=INICIO + timedelta(minutes=minuto - 1, seconds=segundos),
@@ -44,6 +48,8 @@ def evento(
         minuto=minuto,
         indice_do_frame=5,
         posicao_na_linha=0.5,
+        video=video,
+        deslocamento_segundos=deslocamento,
     )
 
 
@@ -65,6 +71,9 @@ def gravar_sessao(
     minutos_nao_processados: tuple[MinutoNaoProcessado, ...] = (),
     inicio: datetime = INICIO,
     processada: bool = True,
+    origem: OrigemDaSessao = OrigemDaSessao.CAMERA,
+    videos: tuple[VideoGravado, ...] = (),
+    amostragem: int = 3,
 ) -> None:
     """Grava a sessão pelos três momentos de D-1.
 
@@ -83,6 +92,7 @@ def gravar_sessao(
         sentido_a=sentido_a,
         sentido_b=sentido_b,
         nome_camera=nome_camera,
+        origem=origem,
     )
     if status is None:
         return
@@ -104,7 +114,7 @@ def gravar_sessao(
         conexao,
         id_sessao,
         versao_do_modelo=VERSAO_DO_MODELO,
-        amostragem=3,
+        amostragem=amostragem,
         limiar_de_confianca=0.35,
     )
 
@@ -113,6 +123,8 @@ def gravar_sessao(
             m for m in range(1, duracao_real + 1) if m not in minutos_perdidos
         )
     gravar_eventos(conexao, id_sessao, eventos)
+    if videos:
+        gravar_videos(conexao, id_sessao, videos)
     gravar_agregados(
         conexao,
         id_sessao,
