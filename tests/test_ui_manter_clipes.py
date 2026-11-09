@@ -145,6 +145,7 @@ def test_AC_024_5_fonte_de_upload_esconde_a_opcao(tmp_path, monkeypatch):
 
     assert not [c for c in at.checkbox if c.label == "Manter clipes de vídeo"]
     assert "Manter clipes de vídeo" not in textos(at)
+    assert "Salva os trechos processados para download ao final." not in textos(at)
 
 
 def test_AC_024_5_voltar_para_camera_ao_vivo_mostra_a_opcao_de_novo(

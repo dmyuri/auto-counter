@@ -181,3 +181,14 @@ def test_AC_031_3_camera_000013_mantem_nome_sentidos_linha_e_previa():
     assert (camera.linha.p1.x, camera.linha.p1.y) == (1053, 348)
     assert (camera.linha.p2.x, camera.linha.p2.y) == (351, 445)
     assert camera.preview == "000013-v3.png"
+
+
+def test_AC_031_2_linha_da_000012_cabe_na_resolucao_declarada():
+    """A parte de resolução de AC-031.2: declarada, e a linha cabe nela."""
+    camera = _camera_do_registro("000012")
+
+    largura, altura = camera.resolucao.largura, camera.resolucao.altura
+    assert largura > 0 and altura > 0
+    for nome, ponto in (("p1", camera.linha.p1), ("p2", camera.linha.p2)):
+        assert 0 <= ponto.x < largura, f"{nome}.x fora de 0..{largura - 1}: {ponto.x}"
+        assert 0 <= ponto.y < altura, f"{nome}.y fora de 0..{altura - 1}: {ponto.y}"

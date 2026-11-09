@@ -484,3 +484,39 @@ def test_AC_013_1_outra_sessao_em_andamento_trava_o_processar(
     botao = botao_processar(at)
     assert botao.label == "Processar 1 vídeo"
     assert botao.disabled is True
+
+
+def test_AC_032_7_upload_com_a_000012_cita_a_camera_e_valida_a_resolucao_dela(
+    monkeypatch, leituras
+):
+    """Registro versionado de verdade: a 000012 (1920×1080) vem selecionada.
+
+    A 000013 declara 1280×720, então o caso "igual à da 000013" se distingue.
+    """
+    import sys
+    from pathlib import Path
+
+    registro = Path(__file__).resolve().parents[1] / "config" / "cameras"
+    monkeypatch.setattr(sys, "argv", ["app.py", "--config-dir", str(registro)])
+    leituras.por_conteudo[b"full-hd"] = LeituraDoVideo(
+        legivel=True, duracao_segundos=30, largura=1920, altura=1080, sha256="fhd"
+    )
+    leituras.por_conteudo[b"hd"] = LeituraDoVideo(
+        legivel=True, duracao_segundos=30, largura=1280, altura=720, sha256="hd"
+    )
+    at = abre_a_interface()
+    next(r for r in at.radio if r.key == "fonte").set_value("upload")
+    at = at.run()
+
+    aviso = next(i.value for i in at.info if "Envie apenas" in i.value)
+    assert "000012" in aviso
+    assert "Praia x Mariz Barros" in aviso
+
+    at = envia(at, video("da_000012.mp4", b"full-hd"), video("da_000013.mp4", b"hd"))
+
+    (motivo,) = erros(at)
+    assert "1280×720" in motivo
+    assert "1920×1080" in motivo
+    assert "000012" in motivo
+    assert "1 vídeo · " in "\n".join(legendas(at))
+    assert botao_processar(at).label == "Processar 1 vídeo"
