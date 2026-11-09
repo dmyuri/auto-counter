@@ -349,3 +349,138 @@ def test_D_6_leitura_pendente_mostra_lendo_na_linha_sem_duracao(
     assert nomes_na_lista(at) == ["a.mp4"]
     assert "lendo…" in legendas(at)
     assert not [c for c in legendas(at) if c.startswith("duração total")]
+
+
+def botao_processar(at):
+    achados = [b for b in at.button if b.key == "processar_videos"]
+    assert len(achados) == 1
+    return achados[0]
+
+
+def leitura_de(duracao: int, sha: str) -> LeituraDoVideo:
+    return LeituraDoVideo(
+        legivel=True, duracao_segundos=duracao, largura=1280, altura=720, sha256=sha
+    )
+
+
+def test_AC_027_9_lista_vazia_mostra_importe_videos_indisponivel(
+    tmp_path, monkeypatch, leituras
+):
+    at = abre_o_upload(tmp_path, monkeypatch)
+
+    botao = botao_processar(at)
+    assert botao.label == "Importe vídeos para iniciar"
+    assert botao.disabled is True
+    assert not [b for b in at.button if b.label == "Iniciar sessão"]
+
+
+def test_AC_027_9_so_invalidos_mostra_importe_videos_indisponivel(
+    tmp_path, monkeypatch, leituras
+):
+    leituras.por_conteudo[b"quebrado"] = ILEGIVEL
+    at = abre_o_upload(tmp_path, monkeypatch)
+
+    at = envia(at, video("quebrado.mp4", b"quebrado"))
+
+    botao = botao_processar(at)
+    assert botao.label == "Importe vídeos para iniciar"
+    assert botao.disabled is True
+
+
+@pytest.mark.parametrize("com_valido_ja_lido", [False, True])
+def test_AC_027_9_em_leitura_mostra_lendo_videos_indisponivel(
+    tmp_path, monkeypatch, leituras, com_valido_ja_lido
+):
+    pendente: Future = Future()
+
+    def iniciar(caminho):
+        if caminho.read_bytes() == b"lento":
+            return pendente
+        return leituras.iniciar(caminho)
+
+    monkeypatch.setattr("auto_counter.pipeline.leitura_video.iniciar_leitura", iniciar)
+    at = abre_o_upload(tmp_path, monkeypatch)
+    if com_valido_ja_lido:
+        at = envia(at, video("pronto.mp4", b"pronto"))
+        assert botao_processar(at).label == "Processar 1 vídeo"
+
+    at = envia(at, video("lento.mp4", b"lento"))
+
+    botao = botao_processar(at)
+    assert botao.label == "Lendo vídeos…"
+    assert botao.disabled is True
+
+
+def test_AC_027_9_processar_1_video_disponivel(tmp_path, monkeypatch, leituras):
+    at = abre_o_upload(tmp_path, monkeypatch)
+
+    at = envia(at, video("a.mp4", b"a"))
+
+    botao = botao_processar(at)
+    assert botao.label == "Processar 1 vídeo"
+    assert botao.disabled is False
+
+
+def test_AC_027_9_processar_n_videos_disponivel(tmp_path, monkeypatch, leituras):
+    at = abre_o_upload(tmp_path, monkeypatch)
+
+    at = envia(at, video("a.mp4", b"a"), video("b.mp4", b"b"), video("c.mp4", b"c"))
+
+    botao = botao_processar(at)
+    assert botao.label == "Processar 3 vídeos"
+    assert botao.disabled is False
+
+
+def test_AC_027_11_soma_acima_de_15_min_trava_o_botao_e_mostra_a_mensagem(
+    tmp_path, monkeypatch, leituras
+):
+    leituras.por_conteudo[b"a"] = leitura_de(899, "a")
+    leituras.por_conteudo[b"b"] = leitura_de(2, "b")
+    at = abre_o_upload(tmp_path, monkeypatch)
+
+    at = envia(at, video("a.mp4", b"a"), video("b.mp4", b"b"))
+
+    botao = botao_processar(at)
+    assert botao.label == "Processar 2 vídeos"
+    assert botao.disabled is True
+    (mensagem,) = [e for e in erros(at) if "15 min" in e]
+    assert "15:01" in mensagem
+
+
+def test_D_9_clicar_em_processar_nao_dispara_sessao(
+    tmp_path, monkeypatch, leituras, disparo
+):
+    at = abre_o_upload(tmp_path, monkeypatch)
+    at = envia(at, video("a.mp4", b"a"))
+
+    botao_processar(at).click()
+    at = at.run()
+
+    assert not at.exception
+    assert disparo.chamadas == []
+    assert nomes_na_lista(at) == ["a.mp4"]
+
+
+def test_AC_013_1_outra_sessao_em_andamento_trava_o_processar(
+    tmp_path, monkeypatch, leituras
+):
+    from datetime import datetime, timezone
+
+    from auto_counter.pipeline.lock import adquirir_trava
+
+    at = abre_o_upload(tmp_path, monkeypatch)
+    at = envia(at, video("a.mp4", b"a"))
+    assert botao_processar(at).disabled is False
+
+    with adquirir_trava(
+        tmp_path / "data",
+        comando="capture",
+        id_camera="000042",
+        nome_camera="Outro local",
+        agora=lambda: datetime(2026, 9, 7, 11, 0, tzinfo=timezone.utc),
+    ):
+        at = at.run()
+
+    botao = botao_processar(at)
+    assert botao.label == "Processar 1 vídeo"
+    assert botao.disabled is True

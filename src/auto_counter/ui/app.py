@@ -63,6 +63,10 @@ segundo plano por `pipeline/leitura_video.py` e entram na lista na ordem recebid
 totais vêm de `pipeline/lista_envio.py` (AC-027.3 a AC-027.8) e ficam em
 `st.session_state`, então sobrevivem à troca de fonte (AC-026.3). "Remover" tira o
 item da lista sem apagar o arquivo (AC-027.8) e fica indisponível com a tela travada.
+
+No lugar de "Iniciar sessão", o upload tem o botão "Processar N vídeos" (AC-027.9), com o
+texto e a disponibilidade de `avaliar_envio`, e a mensagem do limite de 15 min logo acima
+dele (AC-027.11). O clique ainda não faz nada: é de `processamento-upload`.
 """
 
 import argparse
@@ -1313,6 +1317,7 @@ def _configuracao(
         if disponiveis.motivo:
             st.caption(disponiveis.motivo)
 
+    avaliacao_do_envio = None
     if st.session_state[CHAVE_FONTE] == FONTE_CAMERA:
         _duracao_e_saida(travada)
     else:
@@ -1322,7 +1327,7 @@ def _configuracao(
         for chave in (CHAVE_DURACAO, CHAVE_MANTER_CLIPES):
             if chave in st.session_state:
                 st.session_state[chave] = st.session_state[chave]
-        _area_de_envio(
+        avaliacao_do_envio = _area_de_envio(
             _camera_por_id(disponiveis.cameras, id_escolhida), data_dir, tela
         )
 
@@ -1341,8 +1346,19 @@ def _configuracao(
         _parar_antecipadamente(progresso.andamento, data_dir)
         return
 
-    if st.session_state[CHAVE_FONTE] == FONTE_UPLOAD:
-        # O botão de processar é da T-08; "Iniciar sessão" é só da câmera ao vivo.
+    if avaliacao_do_envio is not None:
+        # Fonte de upload: o botão troca "Iniciar sessão" (D-9). Texto e
+        # disponibilidade vêm de `avaliar_envio`. O clique não faz nada aqui:
+        # o que acontece depois dele é de `processamento-upload` (AC-028.1), e
+        # nenhum caminho de upload chama `launch.iniciar_sessao`.
+        if avaliacao_do_envio.aviso_do_limite:
+            st.error(avaliacao_do_envio.aviso_do_limite)
+        st.button(
+            avaliacao_do_envio.texto_do_botao,
+            key="processar_videos",
+            type="primary",
+            disabled=not avaliacao_do_envio.botao_disponivel,
+        )
         return
 
     indisponivel = tela.sessao_em_andamento or id_escolhida is None
