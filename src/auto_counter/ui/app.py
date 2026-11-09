@@ -73,6 +73,12 @@ em segundo plano com a câmera selecionada e só os vídeos válidos, na ordem d
 espera a sessão assumir a trava (AC-028.1). Disparo confirmado consome a lista da aba,
 porque os vídeos entraram na sessão (nota de AC-023.6 de `upload-videos`); recusado ou
 não confirmado, a lista fica e o motivo aparece na tela, sem traceback.
+
+Com a sessão de upload em andamento ou com o resultado dela na tela, o painel ao vivo tem o
+título "Contagem · vídeo k/N" e a fonte fica travada em "Fazer upload de vídeos" em qualquer
+aba (AC-028.3, AC-028.10). No painel de Configuração, no lugar da lista da aba, entra uma
+linha por vídeo com o estado gravado em disco (fila, processando, concluído, falhou ou
+interrompido), sem "Remover" nem totais (R-1 do `_tasks.md`, AC-029.2).
 """
 
 import argparse
@@ -115,6 +121,7 @@ from auto_counter.pipeline.progress import (
     Quantidades,
     Resultado,
     Situacao,
+    VideoNaTela,
     formatar_tempo,
     ler_progresso,
 )
@@ -842,10 +849,9 @@ def _corpo_ao_vivo(
 
 def _andamento(andamento: Andamento) -> None:
     """A sessão em curso (D-16): título, fase, progresso, categorias e tempos."""
-    _cabecalho_ao_vivo(
-        f"Contagem ao vivo · {andamento.nome_camera or andamento.id_camera}",
-        andamento.taxa,
-    )
+    # `titulo` vem do pipeline: "Contagem ao vivo · <câmera>" ou, no upload,
+    # "Contagem · vídeo k/N" (AC-028.3).
+    _cabecalho_ao_vivo(andamento.titulo, andamento.taxa)
     if andamento.fase is Fase.CAPTURA:
         st.markdown(
             f"**Capturando** — {andamento.capturados} de {andamento.pedidos} "
@@ -1285,8 +1291,45 @@ def _corpo_da_lista(camera, tela: EstadoDaTela, lendo_ao_desenhar: bool) -> None
         st.caption(avaliacao.duracao_total)
 
 
-def _area_de_envio(camera, data_dir: Path, tela: EstadoDaTela) -> AvaliacaoDoEnvio:
+def _linha_do_video_da_sessao(posicao: int, video: VideoNaTela) -> None:
+    """Um vídeo da sessão de upload: nome e estado, sem "Remover" (AC-028.3)."""
+    with st.container(key=f"video_da_sessao_{posicao}"):
+        nome, estado = st.columns([6, 2.6], vertical_alignment="center")
+        nome.markdown(f"**{_literal(video.nome)}**")
+        estado.caption(video.estado)
+
+
+def _videos_da_sessao_de_upload(
+    progresso: Progresso, tela: EstadoDaTela
+) -> tuple[VideoNaTela, ...] | None:
+    """Os vídeos da sessão de upload em andamento ou com o resultado na tela.
+
+    Vêm do estado gravado em disco (R-1, D-16), e não da lista da aba, para a
+    lista ser a mesma depois de fechar e reabrir a aba (AC-028.10). Fora desses
+    dois momentos, `None`: vale a lista da aba.
+    """
+    if (
+        progresso.situacao is Situacao.EM_ANDAMENTO
+        and progresso.andamento.origem == "UPLOAD"
+    ):
+        return progresso.andamento.videos
+    if tela.resultado_na_tela and progresso.resultado.origem == "UPLOAD":
+        return progresso.resultado.videos
+    return None
+
+
+def _area_de_envio(
+    camera,
+    data_dir: Path,
+    tela: EstadoDaTela,
+    videos_da_sessao: tuple[VideoNaTela, ...] | None = None,
+) -> AvaliacaoDoEnvio | None:
     """Aviso da câmera, área de envio, recusas, lista e totais (AC-026.2, D-12).
+
+    Com `videos_da_sessao` (sessão de upload em andamento ou com resultado na
+    tela), a área de envio continua desenhada e travada (AC-026.5), mas no lugar
+    da lista da aba entra uma linha por vídeo da sessão, sem "Remover" nem
+    totais (R-1), e não há avaliação a devolver.
 
     O `file_uploader` não leva `type=`, para a recusa por extensão ser a mensagem
     do app (D-3). A lista fica em `st.session_state`, fora do estado do widget,
@@ -1307,6 +1350,10 @@ def _area_de_envio(camera, data_dir: Path, tela: EstadoDaTela) -> AvaliacaoDoEnv
     )
     if enviados and not tela.configuracao_travada:
         _receber_envio(enviados, data_dir)
+    if videos_da_sessao is not None:
+        for posicao, video in enumerate(videos_da_sessao, start=1):
+            _linha_do_video_da_sessao(posicao, video)
+        return None
     for recusa in st.session_state[CHAVE_ENVIO_RECUSAS]:
         st.warning(recusa)
 
@@ -1371,6 +1418,12 @@ def _configuracao(
     st.markdown('<span class="rotulo">Configuração</span>', unsafe_allow_html=True)
     st.markdown('<span class="rotulo">01 · Fonte</span>', unsafe_allow_html=True)
     st.session_state.setdefault(CHAVE_FONTE, FONTE_CAMERA)
+    videos_da_sessao = _videos_da_sessao_de_upload(progresso, tela)
+    if videos_da_sessao is not None:
+        # Sessão de upload em andamento ou com resultado na tela: a fonte é a de
+        # upload em qualquer aba, antes de o `st.radio` (travado) ser desenhado
+        # (R-1, D-16).
+        st.session_state[CHAVE_FONTE] = FONTE_UPLOAD
     st.radio(
         "Fonte",
         [FONTE_CAMERA, FONTE_UPLOAD],
@@ -1417,7 +1470,10 @@ def _configuracao(
             if chave in st.session_state:
                 st.session_state[chave] = st.session_state[chave]
         avaliacao_do_envio = _area_de_envio(
-            _camera_por_id(disponiveis.cameras, id_escolhida), data_dir, tela
+            _camera_por_id(disponiveis.cameras, id_escolhida),
+            data_dir,
+            tela,
+            videos_da_sessao,
         )
 
     if tela.resultado_na_tela:

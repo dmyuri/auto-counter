@@ -18,6 +18,10 @@ import pytest
 
 from auto_counter.pipeline import launch
 from auto_counter.pipeline.lock import InfoDaTrava, OutraSessaoEmAndamentoError
+from tests.test_ui_acompanhamento import (  # noqa: F401  (fixtures usadas por nome)
+    data_dir,
+    textos,
+)
 from tests.test_ui_envio import (  # noqa: F401  (fixtures usadas por nome)
     ILEGIVEL,
     abre_o_upload,
@@ -202,3 +206,194 @@ def test_iniciar_sessao_da_camera_ao_vivo_continua_igual(
     assert len(disparo.chamadas) == 1
     assert disparo.chamadas[0][0] == "000013"
     assert disparo_de_upload.chamadas == []
+
+
+# --- T-17: painel e lista da sessão de upload na tela --------------------------
+#
+# AC-028.3 (título "Contagem · vídeo k/N" e o estado de cada vídeo), AC-028.10
+# (aba nova reencontra tudo do disco), AC-029.1 e AC-029.2 (cancelada), AC-019.2
+# (cabeçalho direto em "Processando") e AC-026.5, mais R-1 e D-16 do `_tasks.md`:
+# a lista do painel de Configuração vem do estado em disco, e não da aba.
+
+import os
+
+from auto_counter.counting.config import Categoria
+from auto_counter.pipeline.lock import adquirir_trava
+from auto_counter.pipeline.state import AnotadorDoEstado, Fase, SituacaoDoVideo
+from tests.test_ui_formulario import INICIO
+from tests.test_ui_layout import indicador
+
+ROTULOS_DOS_ESTADOS = {"fila", "processando", "concluído", "falhou", "interrompido"}
+NOMES = ["a.mp4", "b.mp4", "c.mp4"]
+
+
+def anotador_do_upload(data_dir, nomes=NOMES) -> AnotadorDoEstado:
+    return AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=len(nomes),
+        iniciada_em=INICIO,
+        origem="UPLOAD",
+        videos=nomes,
+    )
+
+
+def upload_no_segundo_video(data_dir) -> AnotadorDoEstado:
+    """3 vídeos: o 1º concluído com 1 carro, o 2º em processamento, o 3º na fila."""
+    a = anotador_do_upload(data_dir)
+    a.iniciar()
+    a.video_iniciado(1)
+    a.minuto_iniciado()
+    a.evento_aceito(1, Categoria.CARRO)
+    a.minuto_processado()
+    a.video_terminado(1, SituacaoDoVideo.CONCLUIDO)
+    a.video_iniciado(2)
+    return a
+
+
+def trava_do_upload(data_dir):
+    return adquirir_trava(
+        data_dir,
+        comando="upload",
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        agora=lambda: INICIO,
+    )
+
+
+def estados_na_lista(at) -> list[str]:
+    return [c.value for c in at.caption if c.value in ROTULOS_DOS_ESTADOS]
+
+
+def titulos(at) -> list[str]:
+    return [s.value for s in at.subheader]
+
+
+def fonte(at):
+    return next(r for r in at.radio if r.key == "fonte")
+
+
+def test_AC_028_3_painel_ao_vivo_tem_o_titulo_contagem_video_k_de_n(data_dir):
+    upload_no_segundo_video(data_dir)
+
+    with trava_do_upload(data_dir):
+        at = abre_a_interface()
+
+    assert not at.exception
+    assert "Contagem · vídeo 2/3" in titulos(at)
+    assert not any(t.startswith("Contagem ao vivo") for t in titulos(at))
+
+
+def test_AC_028_3_cada_video_mostra_o_seu_estado(data_dir):
+    upload_no_segundo_video(data_dir)
+
+    with trava_do_upload(data_dir):
+        at = abre_a_interface()
+
+    assert nomes_na_lista(at) == NOMES
+    assert estados_na_lista(at) == ["concluído", "processando", "fila"]
+
+
+def test_AC_028_3_no_maximo_um_processando_na_tela(data_dir):
+    upload_no_segundo_video(data_dir)
+
+    with trava_do_upload(data_dir):
+        at = abre_a_interface()
+
+    assert estados_na_lista(at).count("processando") == 1
+
+
+def test_AC_019_2_cabecalho_vai_direto_para_processando(data_dir):
+    anotador_do_upload(data_dir).iniciar()
+
+    with trava_do_upload(data_dir):
+        at = abre_a_interface()
+
+    assert indicador(at) == "Processando"
+    assert "Contagem · vídeo 1/3" in titulos(at)
+
+
+def test_AC_028_10_aba_nova_reencontra_a_lista_os_estados_e_as_quantidades(data_dir):
+    upload_no_segundo_video(data_dir)
+
+    with trava_do_upload(data_dir):
+        primeira = abre_a_interface()
+        # Outra aba: nenhum `session_state` em comum, só o disco.
+        segunda = abre_a_interface()
+
+    assert fonte(segunda).value == "upload"
+    assert fonte(segunda).disabled is True
+    assert nomes_na_lista(segunda) == NOMES
+    assert estados_na_lista(segunda) == ["concluído", "processando", "fila"]
+    assert [(m.label, m.value) for m in segunda.metric] == [
+        (m.label, m.value) for m in primeira.metric
+    ]
+    assert ("Total", "1") in [(m.label, m.value) for m in segunda.metric]
+
+
+def test_AC_029_1_cancelada_mostra_cancelado_sem_download(data_dir):
+    a = upload_no_segundo_video(data_dir)
+    a.video_terminado(2, SituacaoDoVideo.INTERROMPIDO)
+    a.terminar(
+        Fase.PROCESSAMENTO_CANCELADO,
+        id_sessao="000013-20260907T110000Z",
+        mensagem="o processamento foi cancelado e os vídeos foram mantidos",
+    )
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert "Processamento cancelado." in textos(at)
+    assert list(at.get("download_button")) == []
+    assert "Baixar .xlsx" not in [b.label for b in at.button]
+
+
+def test_AC_029_2_cancelada_mostra_interrompido_concluido_e_fila(data_dir):
+    a = upload_no_segundo_video(data_dir)
+    a.video_terminado(2, SituacaoDoVideo.INTERROMPIDO)
+    a.terminar(
+        Fase.PROCESSAMENTO_CANCELADO,
+        id_sessao="000013-20260907T110000Z",
+        mensagem="cancelado",
+    )
+
+    at = abre_a_interface()
+
+    assert nomes_na_lista(at) == NOMES
+    assert estados_na_lista(at) == ["concluído", "interrompido", "fila"]
+
+
+def test_AC_026_5_area_de_envio_travada_durante_o_upload(data_dir):
+    upload_no_segundo_video(data_dir)
+
+    with trava_do_upload(data_dir):
+        at = abre_a_interface()
+
+    assert at.file_uploader[0].disabled is True
+    assert fonte(at).disabled is True
+    # A lista do disco não tem "Remover" nem totais.
+    assert [b for b in at.button if (b.key or "").startswith("remover_")] == []
+    assert not [c for c in at.caption if c.value.startswith("duração total")]
+
+
+def test_nova_sessao_depois_do_upload_volta_com_a_lista_vazia(data_dir):
+    a = upload_no_segundo_video(data_dir)
+    a.video_terminado(2, SituacaoDoVideo.INTERROMPIDO)
+    a.terminar(
+        Fase.PROCESSAMENTO_CANCELADO,
+        id_sessao="000013-20260907T110000Z",
+        mensagem="cancelado",
+    )
+    at = abre_a_interface()
+    assert nomes_na_lista(at) == NOMES
+
+    at.button(key="nova_sessao").click()
+    at = at.run()
+
+    assert not at.exception
+    assert nomes_na_lista(at) == []
+    assert fonte(at).value == "upload"
+    assert fonte(at).disabled is False
+    assert at.file_uploader[0].disabled is False
