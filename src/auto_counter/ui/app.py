@@ -307,14 +307,58 @@ CSS_DOS_COMPONENTES = """
   width: auto; font-size: 12px; min-height: 36px; padding: 0 12px;
 }
 .st-key-botao_tema button p::before { content: "◐  "; }
-.st-key-iniciar_sessao, .st-key-nova_sessao, .st-key-parar_antecipadamente,
-.st-key-confirmar_encerramento, .st-key-voltar { width: 100%; }
-.st-key-iniciar_sessao button, .st-key-nova_sessao button,
-.st-key-parar_antecipadamente button {
+.st-key-iniciar_sessao, .st-key-processar_videos, .st-key-nova_sessao,
+.st-key-parar_antecipadamente, .st-key-confirmar_encerramento, .st-key-voltar {
+  width: 100%;
+}
+.st-key-iniciar_sessao button, .st-key-processar_videos button,
+.st-key-nova_sessao button, .st-key-parar_antecipadamente button {
   width: 100%; min-height: 56px; font-size: 15px; font-weight: 700;
   letter-spacing: .08em; text-transform: uppercase;
 }
-.st-key-iniciar_sessao button:disabled { opacity: .4; }
+.st-key-iniciar_sessao button:disabled,
+.st-key-processar_videos button:disabled { opacity: .4; }
+
+/* área de envio: rótulo, caixa tracejada e os textos do protótipo */
+[class*="st-key-envio_"] [data-testid="stWidgetLabel"] {
+  display: flex !important; visibility: visible !important;
+  min-height: 0; height: auto; margin-bottom: 10px;
+}
+[class*="st-key-envio_"] [data-testid="stWidgetLabel"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"] {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  min-height: 112px; padding: 24px 16px; border: 1px dashed var(--line);
+  border-radius: 0; background: var(--panel2); cursor: pointer;
+}
+/* o botão nativo some, mas cobre a caixa inteira: o clique abre o seletor */
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"] > span {
+  position: absolute; inset: 0; margin: 0; opacity: 0; z-index: 1;
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"] > span button {
+  width: 100%; height: 100%; cursor: pointer;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  margin: 0; text-align: center;
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzoneInstructions"] > div {
+  display: none;
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzoneInstructions"]::before {
+  content: "Arraste vídeos aqui";
+  font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700;
+  color: var(--ink);
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzoneInstructions"]::after {
+  content: "ou clique para selecionar · MP4, MOV, AVI, MKV";
+  font-size: 13px; color: var(--muted);
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"][aria-disabled="true"] {
+  opacity: .55; cursor: not-allowed;
+}
 .st-key-confirmar_encerramento button, .st-key-voltar button {
   width: 100%; min-height: 44px;
 }
