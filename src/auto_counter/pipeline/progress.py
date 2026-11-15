@@ -365,6 +365,14 @@ class Resultado:
     origem: str = "CAMERA"
     videos: tuple[VideoNaTela, ...] = ()
     """Só no upload: o estado final de cada vídeo (AC-029.2)."""
+    encerrada_por_servidor_indisponivel: bool = False
+    """AC-033.5; só em `CONCLUIDA` e `SEM_PLANILHA` (AC-035.1, AC-035.2)."""
+    servidor_indisponivel_desde: int | None = None
+    """Segundos desde T0, truncados, da primeira falha da sequência que levou ao
+    encerramento (D-11). `None` quando a sessão não foi marcada."""
+    minutos_perdidos: tuple[int, ...] = ()
+    """A lista de AC-033.5, incluídos os não tentados. Só na sessão marcada
+    (SUP-123): nas demais, o motivo das perdas não vai à tela."""
 
 
 @dataclass(frozen=True)
@@ -484,6 +492,24 @@ def _chave(estado: EstadoDaSessao) -> str:
     return f"{estado.pid}:{estado.iniciada_em.isoformat()}"
 
 
+def _dados_do_servidor(estado: EstadoDaSessao) -> dict:
+    """Os três campos de servidor indisponível do `Resultado` (AC-035.1).
+
+    Só a sessão marcada preenche algo (SUP-123); as outras ficam nos padrões.
+    O instante é relativo a T0 (`iniciada_em`), truncado ao segundo (D-11).
+    """
+    if not estado.encerrada_por_servidor_indisponivel:
+        return {}
+    desde = estado.servidor_indisponivel_desde
+    return {
+        "encerrada_por_servidor_indisponivel": True,
+        "servidor_indisponivel_desde": (
+            None if desde is None else _segundos(estado.iniciada_em, desde)
+        ),
+        "minutos_perdidos": estado.minutos_perdidos,
+    }
+
+
 def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
     chave = _chave(estado)
     if not estado.fase.terminal:
@@ -519,6 +545,11 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
             id_camera=estado.id_camera,
             origem=estado.origem,
             videos=_videos_na_tela(estado),
+            **(
+                _dados_do_servidor(estado)
+                if estado.fase is Fase.SEM_PLANILHA
+                else {}
+            ),
         )
 
     do_banco = _sessao_do_banco(data_dir, estado.id_sessao)
@@ -561,6 +592,7 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
         titulo_dos_clipes=titulo_dos_clipes,
         origem=estado.origem,
         videos=_videos_na_tela(estado),
+        **_dados_do_servidor(estado),
     )
 
 
