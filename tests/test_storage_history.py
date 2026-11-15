@@ -16,7 +16,12 @@ from auto_counter.counting.config import Categoria
 from auto_counter.counting.events import Evento
 from auto_counter.storage.connection import conectar
 from auto_counter.storage.events import gravar_eventos
-from auto_counter.storage.sessions import abrir_sessao, fechar_captura, listar_sessoes
+from auto_counter.storage.sessions import (
+    abrir_sessao,
+    fechar_captura,
+    listar_sessoes,
+    marcar_sessao_cancelada,
+)
 
 ID_CAMERA = "000013"
 SENTIDO_A = "Icaraí"
@@ -224,3 +229,20 @@ def test_AC_030_2_historico_traz_a_origem_de_cada_sessao(tmp_path):
         ("enviada", OrigemDaSessao.UPLOAD),
         ("ao-vivo", OrigemDaSessao.CAMERA),
     ]
+
+
+def test_AC_009_2_sessao_cancelada_aparece_no_historico_com_a_marca(tmp_path):
+    """A cancelada tem total zero, como uma sessão sem tráfego; a marca é o que
+    as distingue (AC-008.6)."""
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(tmp_path) as conexao:
+        _abrir_e_fechar(conexao, "sem-trafego", criada_em=base)
+        _abrir_e_fechar(conexao, "cancelada", criada_em=base + timedelta(minutes=10))
+        marcar_sessao_cancelada(conexao, "cancelada")
+
+        historico = {item.id_sessao: item for item in listar_sessoes(conexao)}
+
+    assert historico["cancelada"].cancelada_pelo_usuario is True
+    assert historico["cancelada"].total_de_eventos == 0
+    assert historico["sem-trafego"].cancelada_pelo_usuario is False
+    assert historico["sem-trafego"].total_de_eventos == 0

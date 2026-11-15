@@ -18,7 +18,11 @@ from auto_counter.capture.status import StatusDaSessao
 from auto_counter.cli import app
 from auto_counter.storage.connection import NOME_DO_ARQUIVO_DO_BANCO, conectar
 from auto_counter.storage.model import OrigemDaSessao
-from auto_counter.storage.sessions import abrir_sessao, fechar_captura
+from auto_counter.storage.sessions import (
+    abrir_sessao,
+    fechar_captura,
+    marcar_sessao_cancelada,
+)
 
 ID_CAMERA = "000013"
 SENTIDO_A = "Icaraí"
@@ -227,3 +231,20 @@ def test_AC_030_2_periodo_do_upload_marcado_como_horario_do_processamento(
     marca = "(horário do processamento)"
     assert marca in _linha_da_sessao(resultado.output, "sessao-upload")
     assert marca not in _linha_da_sessao(resultado.output, "sessao-camera")
+
+
+def test_AC_009_2_session_list_mostra_a_marca_da_sessao_cancelada(runner, data_dir):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(data_dir) as conexao:
+        _abrir_e_fechar(conexao, "normal", criada_em=base)
+        _abrir_e_fechar(conexao, "cancelada", criada_em=base + timedelta(minutes=10))
+        marcar_sessao_cancelada(conexao, "cancelada")
+
+    resultado = runner.invoke(app, ["session", "list"])
+
+    assert resultado.exit_code == 0, resultado.output
+    linhas = {
+        linha.split()[0]: linha for linha in resultado.output.splitlines() if linha
+    }
+    assert "COMPLETA · cancelada pelo usuário" in linhas["cancelada"]
+    assert "cancelada pelo usuário" not in linhas["normal"]

@@ -104,6 +104,9 @@ class SessaoGravada:
     origem: OrigemDaSessao = OrigemDaSessao.CAMERA
     videos: tuple[VideoGravado, ...] = ()
     """Só na sessão de upload, em ordem de posição."""
+    cancelada_pelo_usuario: bool = False
+    """AC-008.6: captura cancelada pelo usuário na interface. Campo próprio, e
+    não um quarto status (SUP-109)."""
 
 
 @dataclass(frozen=True)
@@ -121,6 +124,7 @@ class SessaoNoHistorico:
     status: StatusDaSessao | None
     total_de_eventos: int
     origem: OrigemDaSessao = OrigemDaSessao.CAMERA
+    cancelada_pelo_usuario: bool = False
 
 
 @dataclass(frozen=True)

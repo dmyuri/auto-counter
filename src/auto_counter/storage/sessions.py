@@ -269,6 +269,31 @@ def completar_processamento(
         conexao.commit()
 
 
+def marcar_sessao_cancelada(
+    conexao: sqlite3.Connection,
+    id_sessao: str,
+    *,
+    comitar: bool = True,
+) -> None:
+    """Marca a sessão como cancelada pelo usuário na captura (AC-008.6).
+
+    Só a marca: não apaga nem grava evento ou agregado, e não mexe no status
+    gravado por `fechar_captura` (SUP-109). Sessão inexistente é erro
+    explícito, e quem chama decide o que fazer (D-21 de `interface-sessao`).
+
+    `comitar=False`: mesma regra de `abrir_sessao`.
+    """
+    cursor = conexao.execute(
+        "UPDATE sessao SET cancelada_pelo_usuario = 1 WHERE id_sessao = ?",
+        (id_sessao,),
+    )
+    if cursor.rowcount == 0:
+        conexao.rollback()
+        raise SessaoInexistenteError(id_sessao)
+    if comitar:
+        conexao.commit()
+
+
 def ler_sessao(conexao: sqlite3.Connection, id_sessao: str) -> SessaoGravada | None:
     """Lê a linha de `sessao`, ou `None` se ela não existir.
 
@@ -302,6 +327,7 @@ def ler_sessao(conexao: sqlite3.Connection, id_sessao: str) -> SessaoGravada | N
         sentido_a=linha["sentido_a"],
         sentido_b=linha["sentido_b"],
         origem=OrigemDaSessao(linha["origem"]),
+        cancelada_pelo_usuario=bool(linha["cancelada_pelo_usuario"]),
         videos=tuple(
             VideoGravado(
                 posicao=video["posicao"],
@@ -346,6 +372,7 @@ def listar_sessoes(
             s.fim AS fim,
             s.status AS status,
             s.origem AS origem,
+            s.cancelada_pelo_usuario AS cancelada_pelo_usuario,
             COUNT(e.id_sessao) AS total_de_eventos
         FROM sessao s
         LEFT JOIN evento e ON e.id_sessao = s.id_sessao
@@ -371,6 +398,7 @@ def listar_sessoes(
             ),
             total_de_eventos=linha["total_de_eventos"],
             origem=OrigemDaSessao(linha["origem"]),
+            cancelada_pelo_usuario=bool(linha["cancelada_pelo_usuario"]),
         )
         for linha in linhas
     )

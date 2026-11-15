@@ -1092,6 +1092,10 @@ def listar_sessoes_capturadas(
     `processamento-upload`). Na sessão de upload o período é o do
     processamento, e não o de gravação dos vídeos (Q-020), então ganha a marca
     "(horário do processamento)".
+
+    A sessão cancelada pelo usuário na captura (AC-008.6) mostra a marca "·
+    cancelada pelo usuário" depois do status, para não ser lida como sessão
+    válida sem tráfego (AC-009.2).
     """
     data_dir = _data_dir()
     caminho = caminho_do_banco(data_dir)
@@ -1118,6 +1122,8 @@ def listar_sessoes_capturadas(
 
     for item in sessoes:
         status_texto = "—" if item.status is None else item.status.value
+        if item.cancelada_pelo_usuario:
+            status_texto += " · cancelada pelo usuário"
         periodo = f"{item.inicio or '—'} .. {item.fim or '—'}"
         if item.origem is OrigemDaSessao.UPLOAD:
             periodo += " (horário do processamento)"
