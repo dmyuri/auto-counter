@@ -242,7 +242,11 @@ def test_AC_012_4_o_aviso_de_encerrar_no_processamento_fala_em_cancelar(data_dir
         at = clica(at, "Parar antecipadamente")
 
     assert "A contagem será cancelada" in textos(at)
-    assert "vídeos serão mantidos" in textos(at)
+    assert (
+        "Encerrar agora? A contagem será cancelada e a sessão será finalizada."
+        in textos(at)
+    )
+    assert "reprocessar" not in textos(at)
 
 
 def test_AC_012_5_processamento_cancelado_informa_e_nao_oferece_download(data_dir):

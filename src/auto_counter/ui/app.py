@@ -655,8 +655,7 @@ AVISO_DE_ENCERRAR = {
         "serão descartados e nenhuma contagem será feita."
     ),
     Fase.PROCESSAMENTO: (
-        "Encerrar agora? A contagem será cancelada, nada será gravado e os "
-        "vídeos serão mantidos para reprocessar depois."
+        "Encerrar agora? A contagem será cancelada e a sessão será finalizada."
     ),
 }
 
