@@ -20,7 +20,7 @@ import pytest
 
 from auto_counter.counting.config import Categoria
 from auto_counter.pipeline.state import AnotadorDoEstado
-from auto_counter.pipeline.stop import NOME_DO_PEDIDO
+from auto_counter.pipeline.stop import NOME_DO_PEDIDO, pedir_parada
 from tests.test_pipeline_progress import (
     Relogio,
     com_eventos,
@@ -238,6 +238,53 @@ def test_AC_023_1_aviso_da_captura_diz_que_a_sessao_sera_cancelada(data_dir, rel
     assert "nenhuma contagem será feita" in aviso
     # O aviso antigo, de quando os minutos capturados seguiam para a contagem.
     assert "serão processados" not in aviso
+
+
+
+def botao(at, rotulo: str):
+    return next(b for b in at.button if b.label == rotulo)
+
+
+@pytest.mark.parametrize("fase", ["captura", "processamento"])
+def test_AC_023_1_depois_de_confirmar_o_botao_fica_bloqueado_em_encerrando(
+    data_dir, relogio, fase
+):
+    if fase == "captura":
+        captura_em_curso(data_dir)
+    else:
+        sessao_em_processamento(data_dir, a_processar=2)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+        at = clica(at, "Parar antecipadamente")
+        at = clica(at, "Confirmar encerramento")
+
+    assert "Parar antecipadamente" not in botoes(at)
+    assert "Confirmar encerramento" not in botoes(at)
+    assert botao(at, "Encerrando…").disabled is True
+
+
+def test_AC_023_1_reabrir_a_interface_com_o_pedido_feito_mostra_encerrando(
+    data_dir, relogio
+):
+    captura_em_curso(data_dir)
+    pedir_parada(data_dir)
+
+    at = ao_vivo(data_dir)
+
+    assert "Parar antecipadamente" not in botoes(at)
+    assert botao(at, "Encerrando…").disabled is True
+
+
+def test_AC_023_1_depois_do_ultimo_clipe_contado_o_botao_fica_indisponivel(
+    data_dir, relogio
+):
+    sessao_em_processamento(data_dir, a_processar=2, minutos_com_eventos=(1, 0))
+
+    at = ao_vivo(data_dir)
+
+    assert botao(at, "Parar antecipadamente").disabled is True
+    assert "Iniciar sessão" not in botoes(at)
 
 
 @pytest.mark.parametrize("fase", ["captura", "processamento"])

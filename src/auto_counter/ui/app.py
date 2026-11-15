@@ -943,8 +943,22 @@ def _painel_ao_vivo(progresso: Progresso, tela: EstadoDaTela) -> None:
 
 
 def _parar_antecipadamente(andamento: Andamento, data_dir: Path) -> None:
-    """O botão de encerrar, com confirmação, no lugar de "Iniciar sessão"."""
+    """O botão de encerrar, com confirmação, no lugar de "Iniciar sessão".
+
+    Depois da confirmação, o botão fica bloqueado com "Encerrando…" até o
+    resultado aparecer, inclusive ao reabrir a interface: o pedido é lido do
+    disco, e não da aba. Depois que o último minuto foi contado, não há mais o
+    que cancelar e o botão fica indisponível (AC-023.1).
+    """
+    if andamento.parada_pedida:
+        st.session_state[CHAVE_CONFIRMANDO] = False
+        st.button("Encerrando…", key="encerrando", disabled=True)
+        return
     if not andamento.pode_encerrar:
+        st.session_state[CHAVE_CONFIRMANDO] = False
+        st.button(
+            "Parar antecipadamente", key="parar_antecipadamente", disabled=True
+        )
         return
     if not st.session_state.get(CHAVE_CONFIRMANDO, False):
         st.button(

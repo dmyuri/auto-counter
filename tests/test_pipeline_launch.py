@@ -215,6 +215,26 @@ def test_AC_012_4_encerrar_com_sessao_em_andamento_cria_o_pedido(tmp_path):
     assert (tmp_path / NOME_DO_PEDIDO).is_file()
 
 
+def test_AC_023_1_encerrar_depois_do_ultimo_clipe_contado_nao_cria_pedido(tmp_path):
+    a = AnotadorDoEstado(
+        tmp_path,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=1,
+        iniciada_em=INICIO,
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.processamento_iniciado("000013-20260907T110000Z", 1)
+    a.minuto_processado()
+
+    with trava_do_run(tmp_path):
+        assert encerrar_sessao(tmp_path) is False
+
+    assert not (tmp_path / NOME_DO_PEDIDO).exists()
+
+
 def test_aguardar_inicio_devolve_none_quando_a_sessao_assume_a_trava(tmp_path):
     disparada = dispara(tmp_path, PopenDuble())
 

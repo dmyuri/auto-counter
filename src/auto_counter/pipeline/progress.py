@@ -58,6 +58,7 @@ from auto_counter.pipeline.state import (
     SituacaoDoVideo,
     ler_estado,
 )
+from auto_counter.pipeline.stop import ParadaPorArquivo
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.events import contar_eventos
 from auto_counter.storage.model import SessaoGravada
@@ -234,6 +235,14 @@ class Andamento:
     processados: int
     a_processar: int
     pode_encerrar: bool
+    """Se "Parar antecipadamente" ainda tem efeito (AC-023.1).
+
+    Falso depois do pedido de parada já feito e depois que o último minuto foi
+    contado: dali em diante a sessão só grava o resultado e monta a planilha, e
+    não há mais contagem para cancelar.
+    """
+    parada_pedida: bool
+    """O pedido de parada já existe e a sessão ainda não terminou (AC-023.1)."""
     quantidades: Quantidades | None
     """`None` na captura (SUP-055); zeros a partir do processamento."""
     tempo_decorrido: int
@@ -392,7 +401,17 @@ def _tempo_estimado(estado: EstadoDaSessao, agora: datetime) -> int | None:
     return int(max((faltam - 1) * orcamento, faltam * orcamento - gasto))
 
 
-def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
+def _contagem_terminada(estado: EstadoDaSessao) -> bool:
+    """O último minuto já foi contado; falta só gravar e exportar."""
+    return (
+        estado.fase is Fase.PROCESSAMENTO
+        and estado.minutos_processados >= estado.minutos_a_processar
+    )
+
+
+def _andamento(
+    estado: EstadoDaSessao, agora: datetime, *, parada_pedida: bool
+) -> Andamento:
     quantidades = _quantidades(estado)
     na_captura = estado.fase is Fase.CAPTURA
     if na_captura:
@@ -416,7 +435,12 @@ def _andamento(estado: EstadoDaSessao, agora: datetime) -> Andamento:
         pedidos=estado.duracao_pedida,
         processados=estado.minutos_processados,
         a_processar=estado.minutos_a_processar,
-        pode_encerrar=not estado.fase.terminal,
+        pode_encerrar=(
+            not estado.fase.terminal
+            and not parada_pedida
+            and not _contagem_terminada(estado)
+        ),
+        parada_pedida=parada_pedida,
         quantidades=quantidades,
         tempo_decorrido=_segundos(estado.iniciada_em, agora),
         id_camera=estado.id_camera,
@@ -541,7 +565,10 @@ def _resultado(data_dir: Path, estado: EstadoDaSessao) -> Resultado:
 
 
 def _com_trava_viva(
-    info: InfoDaTrava, estado: EstadoDaSessao | None, agora: datetime
+    info: InfoDaTrava,
+    estado: EstadoDaSessao | None,
+    agora: datetime,
+    data_dir: Path,
 ) -> Progresso | None:
     """O progresso de uma sessão em curso, ou `None` se o estado já terminou."""
     recusa = mensagem_de_sessao_em_andamento(info)
@@ -558,7 +585,11 @@ def _com_trava_viva(
         # O processo terminou de gravar o desfecho e ainda não soltou a trava.
         return None
     return Progresso(
-        Situacao.EM_ANDAMENTO, mensagem_de_recusa=recusa, andamento=_andamento(estado, agora)
+        Situacao.EM_ANDAMENTO,
+        mensagem_de_recusa=recusa,
+        andamento=_andamento(
+            estado, agora, parada_pedida=ParadaPorArquivo(data_dir).foi_pedida()
+        ),
     )
 
 
@@ -574,7 +605,7 @@ def ler_progresso(data_dir: str | Path, *, agora: datetime | None = None) -> Pro
 
     info = ler_trava(data_dir)
     if info is not None:
-        progresso = _com_trava_viva(info, estado, agora)
+        progresso = _com_trava_viva(info, estado, agora, data_dir)
         if progresso is not None:
             return progresso
 

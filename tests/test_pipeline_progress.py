@@ -34,6 +34,7 @@ from auto_counter.pipeline.state import (
     ClipeMantido,
     Fase,
 )
+from auto_counter.pipeline.stop import pedir_parada
 from auto_counter.storage import schema
 from auto_counter.storage.connection import caminho_do_banco, conectar
 from tests.export_helpers import ID_SESSAO, evento, gravar_sessao
@@ -121,6 +122,51 @@ def test_AC_012_2_progresso_indica_a_fase_de_processamento_e_quanto_falta(tmp_pa
     assert andamento.fase is Fase.PROCESSAMENTO
     assert (andamento.processados, andamento.a_processar) == (1, 2)
     assert andamento.pode_encerrar is True
+
+
+@pytest.mark.parametrize("fase", ["captura", "processamento"])
+def test_AC_023_1_pedido_de_parada_feito_deixa_o_encerramento_indisponivel(
+    tmp_path, fase
+):
+    a = anotador(tmp_path)
+    a.iniciar()
+    if fase == "processamento":
+        a.minuto_da_captura(1, True)
+        a.processamento_iniciado(ID_SESSAO, 1)
+    pedir_parada(tmp_path)
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.parada_pedida is True
+    assert andamento.pode_encerrar is False
+
+
+def test_AC_023_1_sem_pedido_de_parada_o_andamento_nao_o_indica(tmp_path):
+    anotador(tmp_path).iniciar()
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    assert andamento.parada_pedida is False
+
+
+def test_AC_023_1_depois_do_ultimo_clipe_contado_nao_ha_mais_o_que_encerrar(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.processamento_iniciado(ID_SESSAO, 2)
+    a.minuto_processado()
+    a.minuto_processado()
+
+    with trava_do_run(tmp_path):
+        andamento = ler_progresso(tmp_path).andamento
+
+    # A sessão ainda grava o resultado e monta a planilha, mas a contagem acabou.
+    assert andamento.fase is Fase.PROCESSAMENTO
+    assert andamento.pode_encerrar is False
+    assert andamento.parada_pedida is False
 
 
 def test_AC_012_3_sessao_concluida_traz_o_status_do_banco_e_a_planilha(tmp_path):
