@@ -204,7 +204,14 @@ def test_AC_023_4_cancelada_sem_planilha_e_falhou_mostram_a_mensagem_sem_cartao(
     at = abre_a_interface()
 
     assert not at.exception
-    assert "desfecho de teste" in textos(at)
+    # O processamento cancelado tem texto próprio na interface; o `mensagem` do
+    # estado, com o comando de reprocessar, é só do terminal.
+    esperado = (
+        "Processamento cancelado. Inicie uma nova sessão."
+        if fase is Fase.PROCESSAMENTO_CANCELADO
+        else "desfecho de teste"
+    )
+    assert esperado in textos(at)
     assert downloads(at) == []
     assert "registros" not in textos(at)
 

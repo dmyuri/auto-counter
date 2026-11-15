@@ -643,6 +643,9 @@ MENSAGEM_DO_TERMINAL = (
     "Sessão iniciada pelo terminal: a interface não acompanha o progresso dela."
 )
 MENSAGEM_SEM_CONTAGEM = "Sem contagem a exibir para esta sessão."
+MENSAGEM_PROCESSAMENTO_CANCELADO = "Processamento cancelado. Inicie uma nova sessão."
+# AC-012.5: os vídeos ficam em disco, mas o reprocessamento é do terminal
+# (`session process`, citado só na saída do `session run`).
 # AC-018.3 e AC-018.4: sessão cancelada, sem planilha, que falhou ou de processo
 # morto não mostra quantidade nenhuma, nem zero.
 
@@ -1087,7 +1090,7 @@ def _resultado(resultado: Resultado) -> None:
         )
         _tempo_total(resultado)
     elif resultado.fase is Fase.PROCESSAMENTO_CANCELADO:
-        st.info(f"Processamento cancelado. {resultado.mensagem}")
+        st.info(MENSAGEM_PROCESSAMENTO_CANCELADO)
         _tempo_total(resultado)
     elif resultado.fase is Fase.SESSAO_CANCELADA:
         # AC-012.7: pedida pelo usuário na captura. Sem quantidades, planilha,

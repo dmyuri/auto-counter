@@ -255,8 +255,12 @@ def test_AC_012_5_processamento_cancelado_informa_e_nao_oferece_download(data_di
 
     at = abre_a_interface()
 
-    assert any("Processamento cancelado" in i.value for i in at.info)
-    assert "session process" in textos(at)
+    # A interface não manda reprocessar: o comando é do terminal, e a mensagem
+    # do estado, com `session process`, continua só na saída do `session run`.
+    assert [i.value for i in at.info if "Processamento cancelado" in i.value] == [
+        "Processamento cancelado. Inicie uma nova sessão."
+    ]
+    assert "session process" not in textos(at)
     assert downloads(at) == []
 
 
