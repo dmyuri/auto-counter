@@ -44,7 +44,7 @@ SUBDIRETORIO_DE_SESSOES = "sessions"
 FORMATO_DO_ID_DE_SESSAO = "%Y%m%dT%H%M%SZ"
 """Carimbo de tempo do id de sessão, no formato de D-5 (`AAAAMMDDTHHMMSSZ`)."""
 
-VERSAO_DO_MANIFEST = 2
+VERSAO_DO_MANIFEST = 3
 """Versão do formato gravado.
 
 `persistencia-resultados` vai ler este arquivo; sem um número de versão, uma
@@ -54,6 +54,11 @@ Subiu de 1 para 2 quando o `sha256` do clipe entrou na entrada de minuto
 (SUP-051): schema já commitado é imutável (`CLAUDE.md`), então campo novo é
 versão nova. Manifests versão 1 continuam sendo lidos — neles o `sha256` é
 nulo, porque não foi registrado.
+
+Subiu de 2 para 3 quando a marca de encerramento por servidor indisponível e o
+instante da queda entraram no topo (AC-033.5, AC-036.2, D-7 de
+`servidor-indisponivel`). Manifests versão 1 e 2 continuam sendo lidos, com a
+marca `False` e o instante nulo.
 """
 
 
@@ -180,6 +185,8 @@ class ManifestDaSessao:
         encerrada_pelo_usuario: bool = False,
         manter_videos: bool = False,
         status: StatusDaSessao | None = None,
+        encerrada_por_servidor_indisponivel: bool = False,
+        servidor_indisponivel_desde: datetime | None = None,
     ) -> None:
         self.dir_sessao = Path(dir_sessao)
         self.id_sessao = id_sessao
@@ -189,6 +196,8 @@ class ManifestDaSessao:
         self.encerrada_pelo_usuario = encerrada_pelo_usuario
         self.manter_videos = manter_videos
         self.status = status
+        self.encerrada_por_servidor_indisponivel = encerrada_por_servidor_indisponivel
+        self.servidor_indisponivel_desde = servidor_indisponivel_desde
         self._capturados: list[MinutoCapturado] = list(minutos_capturados)
         self._perdidos: list[MinutoPerdido] = list(minutos_perdidos)
 
@@ -329,6 +338,8 @@ class ManifestDaSessao:
         *,
         duracao_real: int,
         encerrada_pelo_usuario: bool = False,
+        encerrada_por_servidor_indisponivel: bool = False,
+        servidor_indisponivel_desde: datetime | None = None,
     ) -> Path:
         """Grava o desfecho da sessão: status, duração real e encerramento.
 
@@ -340,6 +351,8 @@ class ManifestDaSessao:
         self.status = resultado.status
         self.duracao_real = duracao_real
         self.encerrada_pelo_usuario = encerrada_pelo_usuario
+        self.encerrada_por_servidor_indisponivel = encerrada_por_servidor_indisponivel
+        self.servidor_indisponivel_desde = servidor_indisponivel_desde
         return self.gravar()
 
     def como_dicionario(self) -> dict:
@@ -356,6 +369,12 @@ class ManifestDaSessao:
             "duracao_real": self.duracao_real,
             "encerrada_pelo_usuario": self.encerrada_pelo_usuario,
             "manter_videos": self.manter_videos,
+            "encerrada_por_servidor_indisponivel": (
+                self.encerrada_por_servidor_indisponivel
+            ),
+            "servidor_indisponivel_desde": _serializa_instante(
+                self.servidor_indisponivel_desde
+            ),
             "status": None if self.status is None else self.status.value,
             "inicio": _serializa_instante(self.inicio),
             "fim": _serializa_instante(self.fim),
@@ -448,4 +467,11 @@ def ler(dir_sessao: str | Path) -> ManifestDaSessao:
         encerrada_pelo_usuario=dados["encerrada_pelo_usuario"],
         manter_videos=dados["manter_videos"],
         status=None if status is None else StatusDaSessao(status),
+        # `get`: manifest versão 1 e 2 não tem os campos (D-7).
+        encerrada_por_servidor_indisponivel=dados.get(
+            "encerrada_por_servidor_indisponivel", False
+        ),
+        servidor_indisponivel_desde=_desserializa_instante(
+            dados.get("servidor_indisponivel_desde")
+        ),
     )

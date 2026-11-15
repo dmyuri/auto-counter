@@ -302,7 +302,8 @@ def test_AC_004_7_manifest_grava_o_sha256_de_cada_clipe_aceito(tmp_path):
 
     Fica ao lado do ETag e do Last-Modified de AC-003.1, e não no lugar deles:
     o ETag continua identificando o recurso no servidor (SUP-009). É campo novo
-    em schema já commitado, então o manifest passa a ser gravado na versão 2.
+    em schema já commitado, então o manifest passou a ser gravado na versão 2
+    (e depois na 3, por `servidor-indisponivel`).
     """
     manifest = manifest_novo(tmp_path, duracao_pedida=3)
 
@@ -315,7 +316,7 @@ def test_AC_004_7_manifest_grava_o_sha256_de_cada_clipe_aceito(tmp_path):
     )
 
     dados = json_do_disco(manifest)
-    assert dados["versao"] == 2
+    assert dados["versao"] == 3
 
     (entrada,) = dados["minutos"]
     assert entrada["sha256"] == "a" * 64
@@ -350,3 +351,71 @@ def test_AC_004_7_manifest_da_versao_1_continua_legivel_com_sha256_nulo(tmp_path
     assert minuto.sha256 is None
     assert minuto.etag == "etag-do-minuto-1"
     assert minuto.last_modified == last_modified(1)
+
+
+INSTANTE_DA_QUEDA = datetime(2026, 9, 7, 14, 33, 40, tzinfo=timezone.utc)
+
+
+def test_AC_036_2_manifest_grava_e_le_a_marca_de_servidor_indisponivel(tmp_path):
+    """AC-036.2: a marca sobrevive no disco até o `session process`."""
+    manifest = manifest_novo(tmp_path, duracao_pedida=3)
+    capturar(manifest, 1)
+
+    manifest.fechar(
+        classificar(3, [2, 3]),
+        duracao_real=3,
+        encerrada_por_servidor_indisponivel=True,
+        servidor_indisponivel_desde=INSTANTE_DA_QUEDA,
+    )
+
+    dados = json_do_disco(manifest)
+    assert dados["versao"] == 3
+    assert dados["encerrada_por_servidor_indisponivel"] is True
+
+    relido = ler(manifest.dir_sessao)
+    assert relido.encerrada_por_servidor_indisponivel is True
+
+
+def test_AC_036_2_manifest_grava_e_le_o_instante_da_queda_em_utc(tmp_path):
+    """AC-035.1 (via D-7): o instante da queda é gravado em ISO 8601 UTC."""
+    manifest = manifest_novo(tmp_path, duracao_pedida=3)
+
+    manifest.fechar(
+        classificar(3, [1, 2, 3]),
+        duracao_real=3,
+        encerrada_por_servidor_indisponivel=True,
+        servidor_indisponivel_desde=INSTANTE_DA_QUEDA,
+    )
+
+    dados = json_do_disco(manifest)
+    assert dados["servidor_indisponivel_desde"] == "2026-09-07T14:33:40+00:00"
+    assert ler(manifest.dir_sessao).servidor_indisponivel_desde == INSTANTE_DA_QUEDA
+
+
+def test_AC_036_2_fechar_sem_a_marca_grava_falso_e_nulo(tmp_path):
+    """Sessão que não encerrou por servidor: padrões `False` e `None`."""
+    manifest = manifest_novo(tmp_path, duracao_pedida=1)
+    capturar(manifest, 1)
+    manifest.fechar(classificar(1, []), duracao_real=1)
+
+    relido = ler(manifest.dir_sessao)
+    assert relido.encerrada_por_servidor_indisponivel is False
+    assert relido.servidor_indisponivel_desde is None
+
+
+def test_AC_036_2_manifest_versao_2_e_lido_sem_a_marca(tmp_path):
+    """AC-036.1/AC-036.2: manifest anterior a esta feature é lido como "não"."""
+    manifest = manifest_novo(tmp_path, duracao_pedida=3)
+    capturar(manifest, 1)
+
+    dados = json_do_disco(manifest)
+    dados["versao"] = 2
+    dados.pop("encerrada_por_servidor_indisponivel")
+    dados.pop("servidor_indisponivel_desde")
+    manifest.caminho.write_text(
+        json.dumps(dados, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+    )
+
+    relido = ler(manifest.dir_sessao)
+    assert relido.encerrada_por_servidor_indisponivel is False
+    assert relido.servidor_indisponivel_desde is None
