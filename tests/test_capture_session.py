@@ -46,6 +46,7 @@ from auto_counter.capture.manifest import NOME_DO_MANIFEST, ler
 from auto_counter.capture.session import (
     INTERVALO_ENTRE_CHECAGENS,
     JANELA_DO_MINUTO,
+    MOTIVO_JANELA_ESGOTADA,
     capturar,
 )
 from auto_counter.capture.status import StatusDaSessao
@@ -668,3 +669,391 @@ def test_AC_032_4_captura_da_000012_pede_so_a_url_dela_e_nomeia_a_sessao_com_o_i
     assert not any("/000013/" in url for url in servidor.urls)
     assert resultado.dir_sessao.parent == tmp_path / "data" / "sessions"
     assert resultado.dir_sessao.name.startswith("000012-")
+
+
+# --- servidor-indisponivel: US-033 (T-04) ---
+
+
+class ServidorComFalhas(ServidorFalso):
+    """O `ServidorFalso` com intervalos de indisponibilidade no relógio falso.
+
+    `indisponivel` é uma lista de `(inicio, fim, modo)` em segundos do relógio
+    falso: dentro de `[inicio, fim)`, HEAD e GET levantam a exceção ou devolvem
+    a resposta do `modo` — `"conexao"` (conexão recusada), `"timeout"`, `"503"`
+    ou `"404"`. Fora dos intervalos, o servidor é o `ServidorFalso`.
+
+    `demora_do_download` avança o relógio depois de cada GET, como um download
+    real. Sem isso, a checagem imediata do minuto seguinte cairia no mesmo
+    instante do GET e nunca poderia pegar o servidor já fora do ar.
+    """
+
+    def __init__(
+        self,
+        relogio,
+        publicacoes,
+        conteudo_por_etag,
+        *,
+        indisponivel=(),
+        demora_do_download: float = 1.0,
+    ):
+        super().__init__(relogio, publicacoes, conteudo_por_etag)
+        self.indisponivel = list(indisponivel)
+        self.demora_do_download = demora_do_download
+
+    def _responder(self, pedido: httpx.Request) -> httpx.Response:
+        decorrido = self.relogio.decorrido()
+        for inicio, fim, modo in self.indisponivel:
+            if inicio <= decorrido < fim:
+                self.pedidos.append((pedido.method, decorrido))
+                if modo == "conexao":
+                    raise httpx.ConnectError("conexão recusada")
+                if modo == "timeout":
+                    raise httpx.ReadTimeout("o servidor não respondeu a tempo")
+                return httpx.Response(int(modo))
+        resposta = super()._responder(pedido)
+        if pedido.method == "GET":
+            self.relogio.avanca(self.demora_do_download)
+        return resposta
+
+
+FORA_DO_AR = 1e9
+
+PUBLICACOES_DOS_TRES_CLIPES = [(0.0, "clipe-a"), (50.0, "clipe-b"), (100.0, "clipe-c")]
+"""Com `demora_do_download=1`: o minuto 1 fecha em t=1, o 2 em t=52 e o 3 em
+t=103. O minuto 4 abre em t=103 e o servidor cai em t=102,5."""
+
+QUEDA_DEPOIS_DO_MINUTO_3 = 102.5
+
+
+def servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis, *, indisponivel=None):
+    return ServidorComFalhas(
+        relogio,
+        PUBLICACOES_DOS_TRES_CLIPES,
+        clipes_legiveis("clipe-a", "clipe-b", "clipe-c"),
+        indisponivel=(
+            indisponivel
+            if indisponivel is not None
+            else [(QUEDA_DEPOIS_DO_MINUTO_3, FORA_DO_AR, "conexao")]
+        ),
+    )
+
+
+def executa_observando(camera, tmp_path, servidor, relogio, minutos: int, **extras):
+    """Como `executa`, devolvendo também os minutos notificados ao observador."""
+    notificados: list[tuple[int, bool]] = []
+    resultado = capturar(
+        camera,
+        minutos,
+        data_dir=tmp_path / "data",
+        cliente=servidor.cliente(),
+        agora=relogio.agora,
+        dormir=DormirFalso(relogio),
+        ao_resolver_minuto=lambda minuto, capturado: notificados.append(
+            (minuto, capturado)
+        ),
+        **extras,
+    )
+    return resultado, notificados
+
+
+def motivos(resultado) -> dict[int, str]:
+    return {item.minuto: item.motivo for item in resultado.minutos_perdidos}
+
+
+@pytest.mark.parametrize("modo", ["conexao", "timeout", "503"])
+def test_AC_033_2_minuto_com_todas_as_checagens_em_falha_tem_motivo_de_servidor(
+    camera, tmp_path, clipes_legiveis, modo
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(
+        relogio,
+        clipes_legiveis,
+        indisponivel=[(QUEDA_DEPOIS_DO_MINUTO_3, FORA_DO_AR, modo)],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=4)
+
+    assert [item.minuto for item in resultado.minutos_capturados] == [1, 2, 3]
+    assert [item.minuto for item in resultado.minutos_perdidos] == [4]
+    motivo = motivos(resultado)[4]
+    assert "servidor indisponível" in motivo
+    assert motivo != MOTIVO_JANELA_ESGOTADA
+    # O motivo também chega ao manifest em disco.
+    assert "servidor indisponível" in motivos(ler(resultado.dir_sessao))[4]
+    # Um único minuto com servidor indisponível, em N = 4, não encerra nada.
+    assert resultado.encerrada_por_servidor_indisponivel is False
+
+
+def test_AC_033_3_minuto_com_uma_resposta_nao_conta_e_zera_a_sequencia(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    # Minuto 4 (t=103 a 193): fora o tempo todo. Minuto 5 (t=193 a 283): fora até
+    # t=240 e depois responde (ETag parado). Minuto 6: fora de novo. O minuto 5
+    # teve resposta, então não conta e a sequência recomeça no minuto 6.
+    servidor = servidor_que_cai_depois_do_minuto_3(
+        relogio,
+        clipes_legiveis,
+        indisponivel=[
+            (QUEDA_DEPOIS_DO_MINUTO_3, 240.0, "conexao"),
+            (283.0, FORA_DO_AR, "conexao"),
+        ],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=6)
+
+    assert [item.minuto for item in resultado.minutos_perdidos] == [4, 5, 6]
+    perdas = motivos(resultado)
+    assert "servidor indisponível" in perdas[4]
+    assert "servidor indisponível" not in perdas[5]
+    assert "servidor indisponível" in perdas[6]
+    assert resultado.encerrada_por_servidor_indisponivel is False
+    assert not any("não tentado" in motivo for motivo in perdas.values())
+
+
+def test_AC_033_3_minuto_com_resposta_404_nao_conta_como_servidor_indisponivel(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(
+        relogio,
+        clipes_legiveis,
+        indisponivel=[(QUEDA_DEPOIS_DO_MINUTO_3, FORA_DO_AR, "404")],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=6)
+
+    # O 404 é resposta do servidor: segue a regra de AC-004.2 até o minuto N.
+    assert [item.minuto for item in resultado.minutos_perdidos] == [4, 5, 6]
+    assert all(
+        "servidor indisponível" not in motivo for motivo in motivos(resultado).values()
+    )
+    assert resultado.encerrada_por_servidor_indisponivel is False
+
+
+def test_AC_033_4_dois_minutos_seguidos_encerram_e_nao_ha_requisicao_depois(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=15)
+
+    assert [item.minuto for item in resultado.minutos_capturados] == [1, 2, 3]
+    assert [item.minuto for item in resultado.minutos_perdidos] == list(range(4, 16))
+    perdas = motivos(resultado)
+    assert all("servidor indisponível" in perdas[minuto] for minuto in (4, 5))
+    for minuto in range(6, 16):
+        assert "não tentado" in perdas[minuto]
+        assert "servidor indisponível" in perdas[minuto]
+    # A janela do minuto 5 fecha em t=283, e a captura acaba ali: nem uma
+    # requisição depois, e nenhuma espera extra no relógio.
+    assert relogio.decorrido() == 283.0
+    assert max(segundo for _, segundo in servidor.pedidos) < 283.0
+    # Os motivos dos não tentados chegam ao manifest em disco.
+    assert "não tentado" in motivos(ler(resultado.dir_sessao))[15]
+
+
+def test_AC_033_5_status_e_calculado_sobre_n_com_os_nao_tentados(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=15)
+
+    # 12 perdidos de 15: INVÁLIDA, sobre o N pedido.
+    assert [item.minuto for item in resultado.minutos_perdidos] == list(range(4, 16))
+    assert resultado.status is StatusDaSessao.INVALIDA
+    assert resultado.duracao_pedida == 15
+    assert resultado.duracao_real == 15
+    assert resultado.encerrada_pelo_usuario is False
+    assert resultado.encerrada_por_servidor_indisponivel is True
+
+    gravado = ler(resultado.dir_sessao)
+    assert gravado.status is StatusDaSessao.INVALIDA
+    assert gravado.duracao_real == 15
+    assert gravado.encerrada_pelo_usuario is False
+    assert gravado.encerrada_por_servidor_indisponivel is True
+
+
+def test_AC_033_7_dois_ultimos_minutos_marcam_a_sessao(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=5)
+
+    assert [item.minuto for item in resultado.minutos_perdidos] == [4, 5]
+    assert all(
+        "servidor indisponível" in motivo and "não tentado" not in motivo
+        for motivo in motivos(resultado).values()
+    )
+    assert resultado.encerrada_por_servidor_indisponivel is True
+    assert resultado.duracao_real == 5
+    assert resultado.encerrada_pelo_usuario is False
+    assert ler(resultado.dir_sessao).encerrada_por_servidor_indisponivel is True
+
+
+def test_AC_033_8_servidor_fora_desde_o_inicio_encerra_sem_minuto_capturado(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = ServidorComFalhas(
+        relogio,
+        [(0.0, "clipe-a")],
+        clipes_legiveis("clipe-a"),
+        indisponivel=[(0.0, FORA_DO_AR, "timeout")],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=5)
+
+    assert resultado.minutos_capturados == ()
+    assert [item.minuto for item in resultado.minutos_perdidos] == [1, 2, 3, 4, 5]
+    perdas = motivos(resultado)
+    assert all("servidor indisponível" in perdas[minuto] for minuto in (1, 2))
+    assert all("não tentado" in perdas[minuto] for minuto in (3, 4, 5))
+    assert resultado.status is StatusDaSessao.INVALIDA
+    assert resultado.encerrada_por_servidor_indisponivel is True
+    assert resultado.inicio is None and resultado.fim is None
+    # Duas janelas de 90 s e mais nada.
+    assert relogio.decorrido() == 2 * JANELA_DO_MINUTO
+    assert not list(resultado.dir_sessao.glob("*.mp4"))
+
+
+def test_AC_033_9_servidor_que_volta_nao_encerra_a_sessao(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    # Minuto 4 (t=103 a 193) fora do ar; o servidor volta e publica o clipe d em
+    # t=200, capturado no minuto 5. O minuto 6 cai de novo, mas sozinho.
+    servidor = ServidorComFalhas(
+        relogio,
+        PUBLICACOES_DOS_TRES_CLIPES + [(200.0, "clipe-d")],
+        clipes_legiveis("clipe-a", "clipe-b", "clipe-c", "clipe-d"),
+        indisponivel=[
+            (QUEDA_DEPOIS_DO_MINUTO_3, 193.0, "conexao"),
+            (203.5, FORA_DO_AR, "conexao"),
+        ],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=6)
+
+    assert [item.minuto for item in resultado.minutos_capturados] == [1, 2, 3, 5]
+    assert [item.minuto for item in resultado.minutos_perdidos] == [4, 6]
+    assert resultado.encerrada_por_servidor_indisponivel is False
+    assert not any("não tentado" in m for m in motivos(resultado).values())
+    assert ler(resultado.dir_sessao).encerrada_por_servidor_indisponivel is False
+
+
+def test_AC_033_10_sessao_de_um_minuto_com_servidor_fora_e_marcada(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = ServidorComFalhas(
+        relogio,
+        [(0.0, "clipe-a")],
+        clipes_legiveis("clipe-a"),
+        indisponivel=[(0.0, FORA_DO_AR, "conexao")],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=1)
+
+    assert [item.minuto for item in resultado.minutos_perdidos] == [1]
+    assert "servidor indisponível" in motivos(resultado)[1]
+    assert resultado.minutos_capturados == ()
+    assert resultado.status is StatusDaSessao.INVALIDA
+    assert resultado.duracao_real == 1
+    assert resultado.encerrada_por_servidor_indisponivel is True
+
+
+class _ParadaNoSegundo:
+    """Pedida a partir de `segundo` no relógio falso."""
+
+    def __init__(self, relogio: RelogioFalso, segundo: float):
+        self.relogio = relogio
+        self.segundo = segundo
+
+    def foi_pedida(self) -> bool:
+        return self.relogio.decorrido() >= self.segundo
+
+
+def test_AC_033_11_parada_no_segundo_minuto_fora_prevalece_e_nao_marca(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+    # O minuto 4 fecha em t=193; a parada chega em t=220, no meio do minuto 5.
+    parada = _ParadaNoSegundo(relogio, 220.0)
+
+    resultado = executa_observando(
+        camera, tmp_path, servidor, relogio, 15, parada=parada
+    )[0]
+
+    assert resultado.encerrada_pelo_usuario is True
+    assert resultado.encerrada_por_servidor_indisponivel is False
+    assert resultado.duracao_real == 4
+    assert [item.minuto for item in resultado.minutos_perdidos] == [4]
+    assert not any("não tentado" in m for m in motivos(resultado).values())
+    assert ler(resultado.dir_sessao).encerrada_por_servidor_indisponivel is False
+
+
+def test_AC_035_1_instante_da_queda_e_o_da_primeira_falha_da_sequencia(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    # O servidor cai em t=125, no fim da janela do minuto 3 (t=52 a 142), que
+    # ainda teve respostas antes disso: não é minuto com servidor indisponível.
+    # A primeira falha é a checagem de t=132, e não o início do minuto 4 (t=142).
+    servidor = ServidorComFalhas(
+        relogio,
+        [(0.0, "clipe-a"), (50.0, "clipe-b")],
+        clipes_legiveis("clipe-a", "clipe-b"),
+        indisponivel=[(125.0, FORA_DO_AR, "conexao")],
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=15)
+
+    assert [item.minuto for item in resultado.minutos_capturados] == [1, 2]
+    perdas = motivos(resultado)
+    assert "servidor indisponível" not in perdas[3]
+    assert "servidor indisponível" in perdas[4] and "servidor indisponível" in perdas[5]
+    assert resultado.encerrada_por_servidor_indisponivel is True
+    assert resultado.servidor_indisponivel_desde == INICIO + timedelta(seconds=132)
+    assert resultado.iniciada_em == INICIO
+
+    gravado = ler(resultado.dir_sessao)
+    assert gravado.servidor_indisponivel_desde == INICIO + timedelta(seconds=132)
+
+
+def test_AC_035_1_sessao_sem_encerramento_por_servidor_nao_tem_instante(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(
+        relogio,
+        [(0.0, "clipe-a"), (60.0, "clipe-b")],
+        clipes_legiveis("clipe-a", "clipe-b"),
+    )
+
+    resultado = executa(camera, tmp_path, servidor, relogio, minutos=2)
+
+    assert resultado.encerrada_por_servidor_indisponivel is False
+    assert resultado.servidor_indisponivel_desde is None
+
+
+def test_AC_022_4_nao_tentados_sao_notificados_ao_observador(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+
+    _, notificados = executa_observando(camera, tmp_path, servidor, relogio, 15)
+
+    # Os não tentados entram de uma vez, sem janela própria (AC-012.1): o
+    # relógio para no fim da janela do minuto 5.
+    assert relogio.decorrido() == 283.0
+    assert notificados == [(1, True), (2, True), (3, True)] + [
+        (minuto, False) for minuto in range(4, 16)
+    ]
