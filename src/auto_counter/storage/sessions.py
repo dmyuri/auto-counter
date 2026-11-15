@@ -485,6 +485,7 @@ class PersistenciaDaCaptura:
         encerrada_pelo_usuario: bool,
         status: StatusDaSessao,
         minutos_perdidos: tuple[int, ...],
+        encerrada_por_servidor_indisponivel: bool,
     ) -> None:
         try:
             fechar_captura(
@@ -496,6 +497,9 @@ class PersistenciaDaCaptura:
                 encerrada_pelo_usuario=encerrada_pelo_usuario,
                 status=status,
                 minutos_perdidos=minutos_perdidos,
+                encerrada_por_servidor_indisponivel=(
+                    encerrada_por_servidor_indisponivel
+                ),
             )
         except Exception as falha:  # noqa: BLE001 — falha de banco não derruba a captura
             self._desfazer_transacao_pendente()

@@ -170,6 +170,7 @@ class Persistencia(Protocol):
         encerrada_pelo_usuario: bool,
         status: StatusDaSessao,
         minutos_perdidos: tuple[int, ...],
+        encerrada_por_servidor_indisponivel: bool,
     ) -> None: ...
 
 
@@ -597,6 +598,7 @@ def capturar(
             encerrada_pelo_usuario=encerrada_pelo_usuario,
             status=resultado.status,
             minutos_perdidos=tuple(minutos_perdidos),
+            encerrada_por_servidor_indisponivel=encerrada_por_servidor,
         )
 
     return ResultadoDaSessao(
