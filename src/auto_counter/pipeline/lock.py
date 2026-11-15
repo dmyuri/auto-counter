@@ -69,7 +69,7 @@ def mensagem_de_sessao_em_andamento(info: InfoDaTrava) -> str:
     )
     inicio = para_brasilia(info.iniciada_em).strftime("%d/%m/%Y %H:%M")
     return (
-        f"já existe uma sessão em andamento: câmera {camera}, iniciada em "
+        f"Já existe uma sessão em andamento: câmera {camera}, iniciada em "
         f"{inicio} (horário de Brasília). Espere ela terminar para iniciar outra."
     )
 
