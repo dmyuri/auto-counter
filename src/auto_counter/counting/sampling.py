@@ -13,10 +13,16 @@ Os frames não amostrados ainda são **lidos** — o OpenCV decodifica em sequê
 —, mas não são entregues a ninguém: o que AC-005.3 proíbe é chamar o detector
 para eles, e é o que este módulo garante ao não os produzir.
 
+Vídeos enviados (SUP-090, AC-028.5 de
+`.spec/features/processamento-upload/spec.md`) são amostrados por fps efetivo,
+em `frames_amostrados_por_taxa`: ⌊D × min(F, taxa)⌋ frames, com tolerância de 1.
+A sessão ao vivo continua com a regra de SUP-017 acima.
+
 Cada amostra carrega o **índice do frame no clipe**, que é o que T-06 usa para
 datar o evento (AC-006.5): sem ele o timestamp não existe.
 """
 
+import math
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterator
@@ -115,3 +121,45 @@ def frames_amostrados(caminho: Path | str, amostragem: int) -> AmostragemDoClipe
     termina vazia e `motivo` diz por quê.
     """
     return AmostragemDoClipe(caminho, amostragem)
+
+
+class _AmostragemPorTaxa(AmostragemDoClipe):
+    """Seleciona `min(fps, frames_por_segundo)` frames por segundo de vídeo.
+
+    Com `F` o fps do arquivo e `r = min(F, frames_por_segundo)`, o frame `i` é
+    analisado quando `i == 0` ou `⌊i·r/F⌋ ≠ ⌊(i−1)·r/F⌋` (D-2). Com `F ≤ r`,
+    todos os frames são analisados.
+    """
+
+    def __init__(self, caminho: Path | str, frames_por_segundo: int) -> None:
+        if frames_por_segundo < 1:
+            raise ValueError(
+                f"frames_por_segundo precisa ser um inteiro de pelo menos 1, e "
+                f"não {frames_por_segundo} (SUP-090)"
+            )
+        super().__init__(caminho, 1)
+        self.frames_por_segundo = frames_por_segundo
+
+    def _percorrer(self, captura) -> Iterator[FrameAmostrado]:
+        fps = self.fps or 0.0
+        if fps <= 0:
+            fps = float(self.frames_por_segundo)
+        taxa = min(fps, float(self.frames_por_segundo))
+        indice = 0
+        while True:
+            leu, imagem = captura.read()
+            if not leu:
+                return
+            self.total_de_frames = indice + 1
+            if indice == 0 or math.floor(indice * taxa / fps) != math.floor(
+                (indice - 1) * taxa / fps
+            ):
+                yield FrameAmostrado(indice=indice, imagem=imagem)
+            indice += 1
+
+
+def frames_amostrados_por_taxa(
+    caminho: Path | str, frames_por_segundo: int
+) -> AmostragemDoClipe:
+    """Amostra por fps efetivo (SUP-090): o fps vem do arquivo, lido na abertura."""
+    return _AmostragemPorTaxa(caminho, frames_por_segundo)

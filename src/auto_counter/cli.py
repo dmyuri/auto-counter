@@ -32,6 +32,14 @@ para `session run`, `session capture` e `session process`; `session list` e
 De `.spec/features/interface-sessao/spec.md`: SUP-041 (o comando `ui` abre a
 interface apenas em localhost, sem autenticação).
 
+De `.spec/features/processamento-upload/spec.md`: AC-030.7 e SUP-098 (o comando
+`session upload <id_camera> <arquivo>...` roda o pipeline completo até o XLSX
+sem a interface web, recusa o arquivo inválido nomeando-o antes de qualquer
+processamento, avisa a duplicata em `stderr` e pega a mesma trava de sessão
+única), AC-030.2 (`session list`
+mostra a origem de cada sessão, e o período da sessão de upload é marcado como
+horário do processamento).
+
 Todo erro tratado das camadas de baixo vira aqui mensagem legível em stderr e
 código de saída diferente de zero — nunca traceback (`CLAUDE.md`).
 """
@@ -96,7 +104,13 @@ from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
     data_dir_do_ambiente,
 )
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError, adquirir_trava
+from auto_counter.pipeline.preparo_upload import triar_arquivos
 from auto_counter.pipeline.run import executar_sessao
+from auto_counter.pipeline.upload import executar_upload
+from auto_counter.counting.upload import processar_sessao_de_upload
+from auto_counter.upload.manifest import NOME_DO_REGISTRO, apagar_videos
+from auto_counter.upload.manifest import e_sessao_de_upload
+from auto_counter.upload.manifest import ler as ler_registro_do_upload
 from auto_counter.pipeline.state import Fase
 from auto_counter.pipeline.stop import ParadaComposta, ParadaPorArquivo
 from auto_counter.pipeline.processing import (
@@ -107,7 +121,8 @@ from auto_counter.pipeline.processing import (
 )
 from auto_counter.storage.connection import caminho_do_banco
 from auto_counter.storage.connection import conectar as conectar_ao_banco
-from auto_counter.storage.persist import persistir_sessao
+from auto_counter.storage.model import OrigemDaSessao
+from auto_counter.storage.persist import persistir_sessao, persistir_sessao_de_upload
 from auto_counter.storage.sessions import (
     PersistenciaDaCaptura,
     ler_sessao,
@@ -116,6 +131,15 @@ from auto_counter.storage.sessions import (
 
 SUBDIRETORIO_DE_PREVIEWS = "previews"
 """Onde o PNG cai dentro do diretório de dados quando `--out` é omitido."""
+
+TETO_DE_ENVIO_DO_STREAMLIT_EM_MB = 2048
+"""Teto do `file_uploader` do Streamlit, em MB (R-2 de `upload-videos`).
+
+O componente mantém o arquivo inteiro em memória e recusa, com a mensagem dele,
+o que passar deste teto, antes de o app ver o arquivo. Com 2048 MB, todo arquivo
+de 1 GB a ~2 GB chega ao app, que mostra a mensagem de AC-027.10. O limite de
+1 GB **em bytes** é do app (`pipeline/envio.py`), não do Streamlit.
+"""
 
 app = typer.Typer(
     name="auto-counter",
@@ -600,6 +624,102 @@ def executar_sessao_completa(
             typer.echo(aviso)
         return
 
+    if estado.fase in (Fase.PROCESSAMENTO_CANCELADO, Fase.SESSAO_CANCELADA):
+        # Os dois são pedidos do usuário (AC-012.5, AC-012.7): saem com código 0.
+        typer.echo(estado.mensagem)
+        return
+
+    raise _erro(estado.mensagem or "a sessão terminou sem planilha")
+
+
+@session_app.command("upload")
+def enviar_videos(
+    id_camera: str = typer.Argument(
+        ..., metavar="ID", help="Id da câmera, como no registro (ex.: 000013)."
+    ),
+    arquivos: list[Path] = typer.Argument(
+        ..., metavar="ARQUIVO...", help="Um ou mais vídeos a contar, na ordem."
+    ),
+    nome: list[str] | None = typer.Option(
+        None,
+        "--nome",
+        hidden=True,
+        help="Nome original de cada arquivo, na mesma ordem (só a interface usa).",
+    ),
+    config_dir: Path = OPCAO_CONFIG_DIR,
+) -> None:
+    """Conta vídeos enviados como uma sessão e exporta o XLSX (AC-030.7).
+
+    É o mesmo comando que a interface dispara em segundo plano para a fonte
+    "Fazer upload de vídeos". Usa os padrões de processamento (sem
+    `--threshold`, `--sample-rate` nem `--keep-clips`: a cópia recebida é apagada
+    ao fim da sessão concluída, SUP-097) e não inicia a interface web.
+
+    A ordem é a de D-13: a câmera do registro e a triagem dos arquivos
+    (existência, extensão e tamanho) vêm antes da trava de sessão única
+    (AC-028.2); só depois entram a leitura de cada vídeo, a resolução da câmera
+    e o limite de 15 min somados. Toda recusa nomeia o arquivo. Duplicata só
+    avisa em `stderr`. Ctrl+C no processamento o cancela: nada é gravado e os
+    vídeos ficam para `session process` (AC-029.1).
+    """
+    nomes = list(nome) if nome else [arquivo.name for arquivo in arquivos]
+    if len(nomes) != len(arquivos):
+        raise _erro(
+            f"--nome foi dado {len(nomes)} vez(es) para {len(arquivos)} "
+            "arquivo(s); passe um --nome por arquivo, na mesma ordem"
+        )
+
+    registro = _carrega(config_dir)
+    escolhida = _camera_do_registro(registro, id_camera, config_dir)
+    try:
+        triar_arquivos(arquivos, nomes)
+    except ValueError as falha:
+        raise _erro(str(falha)) from falha
+
+    data_dir = _data_dir()
+    sinal = _ParadaPorSinal(data_dir)
+
+    def avisar(mensagem: str) -> None:
+        typer.secho(f"aviso: {mensagem}", err=True, fg=typer.colors.YELLOW)
+
+    try:
+        with _trava(data_dir, "upload", escolhida):
+            estado = executar_upload(
+                escolhida,
+                arquivos,
+                nomes,
+                data_dir=data_dir,
+                agora=_agora,
+                criar_detector=lambda caminho, config: _detector(caminho, config),
+                criar_parada=sinal.nova,
+                ao_avisar=avisar,
+            )
+    except OutraSessaoEmAndamentoError as falha:
+        raise _erro(str(falha)) from falha
+    except KeyboardInterrupt as falha:
+        raise _erro(
+            "sessão abortada pelo usuário; os vídeos recebidos ficam em "
+            "sessions/ para `session process`"
+        ) from falha
+    except typer.Exit:
+        raise
+    except Exception as falha:  # noqa: BLE001 — nenhuma falha crua chega ao usuário
+        raise _erro(str(falha) or type(falha).__name__) from falha
+    finally:
+        sinal.restaurar()
+
+    typer.echo(f"Sessão:            {estado.id_sessao}")
+    if estado.status is not None:
+        typer.echo(f"Status:            {estado.status}")
+
+    if estado.fase is Fase.CONCLUIDA:
+        typer.echo(f"Planilha:          {estado.planilha}")
+        with conectar_ao_banco(data_dir) as conexao:
+            aviso = linha_de_aviso(ler_sessao(conexao, estado.id_sessao))
+        if aviso is not None:
+            typer.echo(aviso)
+        return
+
     if estado.fase is Fase.PROCESSAMENTO_CANCELADO:
         typer.echo(estado.mensagem)
         return
@@ -632,6 +752,8 @@ def abrir_interface(
         str(port),
         "--browser.gatherUsageStats",
         "false",
+        "--server.maxUploadSize",
+        str(TETO_DE_ENVIO_DO_STREAMLIT_EM_MB),
         "--",
         "--config-dir",
         str(config_dir.resolve()),
@@ -679,8 +801,14 @@ def _imprime_contagem(
     resultado: ResultadoDaContagem,
     camera_: Camera,
     config: ConfiguracaoDoProcessamento,
+    *,
+    amostragem_por_fps: bool = False,
 ) -> None:
-    """Relatório final do processamento: o que foi contado e com o quê."""
+    """Relatório final do processamento: o que foi contado e com o quê.
+
+    Na sessão de upload a amostragem é por frames por segundo de vídeo
+    (SUP-090), e não 1 a cada N; `amostragem_por_fps` troca só essa linha.
+    """
     registro = resultado.registro
     processados = ", ".join(str(m) for m in resultado.minutos_processados) or "nenhum"
     sem_dado = (
@@ -698,7 +826,13 @@ def _imprime_contagem(
     typer.echo(f"Por categoria:     {_contagem_por(resultado.eventos, 'categoria')}")
     typer.echo(f"Versão do modelo:  {registro.versao_do_modelo}")
     typer.echo(f"Limiar:            {config.limiar_de_confianca}")
-    typer.echo(f"Amostragem:        1 frame a cada {config.amostragem}")
+    if amostragem_por_fps:
+        typer.echo(
+            f"Amostragem:        {config.frames_por_segundo} frames por segundo "
+            "de vídeo"
+        )
+    else:
+        typer.echo(f"Amostragem:        1 frame a cada {config.amostragem}")
     typer.echo(f"Eventos em:        {resultado.caminho}")
 
 
@@ -735,18 +869,34 @@ def processar_sessao_capturada(
     Terminado o processamento **com sucesso**, os vídeos da sessão são
     descartados, a menos que o manifest traga `manter_videos` (AC-003.5, D-5).
     Processamento que falha não apaga nada.
+
+    A sessão cancelada pelo usuário na captura (AC-012.7) é recusada: os clipes
+    dela foram apagados no cancelamento.
+
+    Numa sessão de upload (`upload.json`, AC-029.3), todos os vídeos são
+    contados desde o primeiro, com os padrões de processamento (por isso
+    `--threshold` e `--sample-rate` são recusados), o resultado é gravado como o
+    de uma sessão de upload concluída e os vídeos são apagados em seguida
+    (AC-030.6). A planilha sai com `session export`.
     """
+    data_dir = _data_dir()
+    dir_sessao = diretorio_da_sessao(data_dir, id_sessao)
+    # AC-029.3, D-14: a presença do `upload.json` identifica a sessão de upload.
+    if e_sessao_de_upload(dir_sessao):
+        _processar_upload_gravado(
+            id_sessao, threshold, sample_rate, data_dir, dir_sessao, config_dir
+        )
+        return
+
     try:
         config = _configuracao(threshold, sample_rate)
     except ValueError as falha:
         raise _erro(str(falha)) from falha
 
-    data_dir = _data_dir()
-    dir_sessao = diretorio_da_sessao(data_dir, id_sessao)
     if not (dir_sessao / NOME_DO_MANIFEST).is_file():
         raise _erro(
-            f"sessão '{id_sessao}' não encontrada: não há "
-            f"{NOME_DO_MANIFEST} em {dir_sessao}"
+            f"sessão '{id_sessao}' não encontrada: não há {NOME_DO_MANIFEST} "
+            f"nem {NOME_DO_REGISTRO} em {dir_sessao}"
         )
 
     try:
@@ -761,11 +911,120 @@ def processar_sessao_capturada(
 
     try:
         with _trava(data_dir, "process", escolhida):
+            _recusar_sessao_cancelada(data_dir, id_sessao)
             _processar_e_persistir(
                 config, data_dir, dir_sessao, manifest.manter_videos, escolhida
             )
     except OutraSessaoEmAndamentoError as falha:
         raise _erro(str(falha)) from falha
+
+
+def _recusar_sessao_cancelada(data_dir: Path, id_sessao: str) -> None:
+    """AC-012.7, SUP-110: sessão cancelada na captura não tem o que processar.
+
+    Os clipes foram apagados no cancelamento. Banco que não abre, ou sem a
+    sessão, segue o caminho de sempre: sem a marca não há como saber, e as
+    etapas seguintes falham pelos próprios motivos.
+    """
+    try:
+        with conectar_ao_banco(data_dir) as conexao:
+            gravada = ler_sessao(conexao, id_sessao)
+    except Exception:  # noqa: BLE001
+        return
+    if gravada is not None and gravada.cancelada_pelo_usuario:
+        raise _erro(
+            f"a sessão {id_sessao} foi cancelada pelo usuário na captura e não "
+            "tem vídeos para processar"
+        )
+
+
+def _processar_upload_gravado(
+    id_sessao: str,
+    threshold: float | None,
+    sample_rate: int | None,
+    data_dir: Path,
+    dir_sessao: Path,
+    config_dir: Path,
+) -> None:
+    """`session process` numa sessão de upload, em disco (D-14, AC-029.3)."""
+    if threshold is not None or sample_rate is not None:
+        raise _erro(
+            "--threshold e --sample-rate não valem para uma sessão de upload: "
+            "ela usa os padrões de processamento (AC-028.4, SUP-090)"
+        )
+
+    try:
+        registro_do_upload = ler_registro_do_upload(dir_sessao)
+    except (OSError, ValueError, KeyError) as falha:
+        raise _erro(
+            f"o {NOME_DO_REGISTRO} de {dir_sessao} não pôde ser lido: {falha}"
+        ) from falha
+
+    ausentes = [
+        video.nome_original
+        for video in registro_do_upload.videos
+        if not (dir_sessao / video.arquivo).is_file()
+    ]
+    if ausentes:
+        raise _erro(
+            f"os vídeos da sessão '{id_sessao}' já foram apagados ou não estão "
+            f"mais em {dir_sessao} ({', '.join(ausentes)}); não há o que "
+            "reprocessar"
+        )
+
+    registro = _carrega(config_dir)
+    escolhida = _camera_do_registro(registro, registro_do_upload.id_camera, config_dir)
+    config = ConfiguracaoDoProcessamento()
+
+    try:
+        with _trava(data_dir, "process", escolhida):
+            try:
+                caminho_do_onnx, versao = conferir_modelo(data_dir)
+            except (ModeloAusenteError, OSError) as falha:
+                raise _erro(str(falha)) from falha
+
+            inicio = _agora()
+            try:
+                resultado = processar_sessao_de_upload(
+                    dir_sessao,
+                    camera=escolhida,
+                    detector=_detector(caminho_do_onnx, config),
+                    config=config,
+                    versao_do_modelo=versao,
+                    inicio_do_processamento=inicio,
+                )
+            except (SessaoSemClipes, OSError) as falha:
+                raise _erro(str(falha)) from falha
+            fim = _agora()
+
+            _imprime_contagem(resultado, escolhida, config, amostragem_por_fps=True)
+
+            # A persistência vem antes do descarte (AC-030.6): falha no banco
+            # preserva os vídeos e a sessão pode ser reprocessada.
+            try:
+                with conectar_ao_banco(data_dir) as conexao:
+                    resumo = persistir_sessao_de_upload(
+                        conexao, dir_sessao, camera=escolhida, inicio=inicio, fim=fim
+                    )
+            except Exception as falha:  # noqa: BLE001
+                raise _erro(
+                    f"não foi possível persistir a sessão no banco: {falha}; os "
+                    "vídeos não foram apagados e esta sessão pode ser reprocessada"
+                ) from falha
+            apagados = apagar_videos(dir_sessao)
+    except OutraSessaoEmAndamentoError as falha:
+        raise _erro(str(falha)) from falha
+
+    typer.echo(f"Banco:             {caminho_do_banco(data_dir)}")
+    typer.echo(
+        f"Persistido:        {resumo.eventos_gravados} evento(s), "
+        f"{resumo.minutos_capturados} minuto(s) com dado, "
+        f"{resumo.minutos_sem_dado} minuto(s) sem dado"
+    )
+    typer.echo(
+        f"Vídeos:            {apagados} arquivo(s) de vídeo apagado(s); esta "
+        "sessão não pode mais ser reprocessada"
+    )
 
 
 def _processar_e_persistir(
@@ -852,6 +1111,15 @@ def listar_sessoes_capturadas(
 
     Nenhuma câmera é resolvida pelo registro — o id da câmera já está gravado
     na linha de cada sessão.
+
+    Cada linha traz a origem da sessão, CAMERA ou UPLOAD (AC-030.2, feature
+    `processamento-upload`). Na sessão de upload o período é o do
+    processamento, e não o de gravação dos vídeos (Q-020), então ganha a marca
+    "(horário do processamento)".
+
+    A sessão cancelada pelo usuário na captura (AC-008.6) mostra a marca "·
+    cancelada pelo usuário" depois do status, para não ser lida como sessão
+    válida sem tráfego (AC-009.2).
     """
     data_dir = _data_dir()
     caminho = caminho_do_banco(data_dir)
@@ -878,10 +1146,14 @@ def listar_sessoes_capturadas(
 
     for item in sessoes:
         status_texto = "—" if item.status is None else item.status.value
+        if item.cancelada_pelo_usuario:
+            status_texto += " · cancelada pelo usuário"
         periodo = f"{item.inicio or '—'} .. {item.fim or '—'}"
+        if item.origem is OrigemDaSessao.UPLOAD:
+            periodo += " (horário do processamento)"
         typer.echo(
-            f"{item.id_sessao}  {item.id_camera}  {periodo}  {status_texto}  "
-            f"{item.total_de_eventos} veículo(s)"
+            f"{item.id_sessao}  {item.origem.value} {item.id_camera}  {periodo}  "
+            f"{status_texto}  {item.total_de_eventos} veículo(s)"
         )
 
 

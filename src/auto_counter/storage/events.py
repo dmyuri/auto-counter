@@ -51,6 +51,8 @@ def gravar_eventos(
             evento.categoria.value,
             evento.confianca,
             evento.minuto,
+            evento.video,
+            evento.deslocamento_segundos,
         )
         for evento in eventos
     ]
@@ -62,13 +64,15 @@ def gravar_eventos(
             """
             INSERT INTO evento
                 (id_sessao, id_de_rastreio, sentido, timestamp, categoria,
-                 confianca, minuto)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+                 confianca, minuto, video, deslocamento)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT (id_sessao, id_de_rastreio, sentido) DO UPDATE SET
                 timestamp = excluded.timestamp,
                 categoria = excluded.categoria,
                 confianca = excluded.confianca,
-                minuto = excluded.minuto
+                minuto = excluded.minuto,
+                video = excluded.video,
+                deslocamento = excluded.deslocamento
             """,
             linhas,
         )
@@ -109,7 +113,8 @@ def ler_eventos(
 
     linhas = conexao.execute(
         """
-        SELECT id_de_rastreio, sentido, timestamp, categoria, confianca, minuto
+        SELECT id_de_rastreio, sentido, timestamp, categoria, confianca, minuto,
+               video, deslocamento
         FROM evento
         WHERE id_sessao = ?
         ORDER BY timestamp, id_de_rastreio, sentido
@@ -124,6 +129,8 @@ def ler_eventos(
             categoria=Categoria(linha["categoria"]),
             confianca=linha["confianca"],
             minuto=linha["minuto"],
+            video=linha["video"],
+            deslocamento=linha["deslocamento"],
         )
         for linha in linhas
     )

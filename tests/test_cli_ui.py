@@ -49,6 +49,19 @@ def test_SUP_041_a_interface_escuta_apenas_em_localhost(runner, comandos):
     assert valor_de(comando, "--server.port") == "8501"
 
 
+def test_AC_027_10_ui_sobe_o_teto_de_envio_do_streamlit_para_2048_mb(
+    runner, comandos
+):
+    resultado = runner.invoke(app, ["ui"])
+
+    assert resultado.exit_code == 0, resultado.output
+    (comando,) = comandos
+    assert valor_de(comando, "--server.maxUploadSize") == "2048"
+    # a opção é do servidor do Streamlit: precisa vir antes do "--" dos
+    # argumentos do script
+    assert comando.index("--server.maxUploadSize") < comando.index("--")
+
+
 def test_ui_aponta_para_o_script_da_interface_que_existe(runner, comandos):
     runner.invoke(app, ["ui"])
 

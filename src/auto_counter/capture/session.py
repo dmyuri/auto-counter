@@ -46,8 +46,13 @@ import httpx
 from auto_counter.cameras.model import Camera
 from auto_counter.cameras.url import url_do_clipe
 from auto_counter.capture.content import sha256_do_arquivo
-from auto_counter.capture.download import DownloadFalhouError, baixar
+from auto_counter.capture.download import (
+    DownloadFalhouError,
+    DownloadInterrompido,
+    baixar,
+)
 from auto_counter.capture.duration import validar_duracao
+from auto_counter.capture.espera import esperar
 from auto_counter.capture.manifest import (
     ManifestDaSessao,
     MinutoCapturado,
@@ -95,9 +100,11 @@ class Parada(Protocol):
     o mesmo gancho que o Ctrl+C do CLI (T-10) e, depois, o botão da interface
     (AC-012.4) acionam.
 
-    O sinal é consultado **entre checagens e entre minutos**: uma parada não
-    espera a janela de 90 s vencer para ter efeito, e um minuto abandonado no
-    meio da janela não vira minuto perdido.
+    O sinal é consultado **entre checagens e entre minutos**, durante a espera
+    entre checagens, em pedaços de meio segundo, e durante o download: uma
+    parada não espera a janela de 90 s vencer, nem a espera de 10 s acabar,
+    para ter efeito, e um minuto abandonado no meio da janela não vira minuto
+    perdido.
     """
 
     def foi_pedida(self) -> bool: ...
@@ -230,8 +237,9 @@ def _janela_de_um_minuto(
       ilegível: descarta e continua na janela (AC-004.7). A comparação é só com
       o clipe **imediatamente anterior** (SUP-051), com a consequência assumida
       de que repetição alternada não é detectada;
-    - parada pedida entre duas checagens → a janela é abandonada e o minuto não
-      existe, nem como capturado nem como perdido (AC-003.6);
+    - parada pedida entre duas checagens, durante a espera entre elas ou
+      durante o download → a janela é abandonada e o minuto não existe, nem
+      como capturado nem como perdido (AC-003.6, AC-012.7);
     - janela vencida → minuto perdido, com o motivo.
 
     Nenhuma exceção das camadas de baixo escapa: rede, HTTP, header ausente e
@@ -257,7 +265,10 @@ def _janela_de_um_minuto(
                     prazo=prazo,
                     dormir=dormir,
                     agora=agora,
+                    parada=parada,
                 )
+            except DownloadInterrompido:
+                return _ParadaPedida()
             except DownloadFalhouError as erro:
                 # AC-004.1: esgotadas as 3 tentativas dentro da janela, o
                 # minuto é marcado como não capturado — não se recomeça a
@@ -281,7 +292,12 @@ def _janela_de_um_minuto(
                 restante = (prazo - agora()).total_seconds()
                 if restante <= 0:
                     break
-                dormir(min(INTERVALO_ENTRE_CHECAGENS, restante))
+                if esperar(
+                    min(INTERVALO_ENTRE_CHECAGENS, restante),
+                    dormir=dormir,
+                    parada=parada,
+                ):
+                    return _ParadaPedida()
                 continue
 
             # AC-004.3: o arquivo inválido não pode ficar no diretório da
@@ -296,7 +312,10 @@ def _janela_de_um_minuto(
         restante = (prazo - agora()).total_seconds()
         if restante <= 0:
             break
-        dormir(min(INTERVALO_ENTRE_CHECAGENS, restante))
+        if esperar(
+            min(INTERVALO_ENTRE_CHECAGENS, restante), dormir=dormir, parada=parada
+        ):
+            return _ParadaPedida()
 
     return _MinutoPerdido(motivo=motivo)
 

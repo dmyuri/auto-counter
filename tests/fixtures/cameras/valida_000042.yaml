@@ -7,3 +7,4 @@ sentido_b: "descendo"
 linha:
   p1: {x: 10, y: 10}
   p2: {x: 20, y: 700}
+resolucao: {largura: 1280, altura: 720}

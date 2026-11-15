@@ -22,6 +22,7 @@ CAMERA_VALIDA = {
     "sentido_a": "sentido A",
     "sentido_b": "sentido B",
     "linha": {"p1": {"x": 120, "y": 400}, "p2": {"x": 1160, "y": 420}},
+    "resolucao": {"largura": 1280, "altura": 720},
 }
 
 CAMPOS_OBRIGATORIOS = ("id", "nome", "sentido_a", "sentido_b", "linha")
@@ -104,6 +105,58 @@ def test_AC_002_4_camera_sem_linha_nao_produz_modelo_valido():
     campo_linha = Camera.model_fields["linha"]
     assert campo_linha.is_required()
     assert campo_linha.default_factory is None
+
+
+def test_AC_001_2_camera_sem_resolucao_e_rejeitada_citando_o_campo():
+    # SUP-086: `resolucao` é obrigatória, sem valor padrão.
+    dados = deepcopy(CAMERA_VALIDA)
+    dados.pop("resolucao", None)
+
+    with pytest.raises(ValidationError) as erro:
+        Camera(**dados)
+
+    assert locs(erro.value) == [("resolucao",)]
+    assert erro.value.errors()[0]["type"] == "missing"
+    assert "resolucao" in str(erro.value)
+
+
+@pytest.mark.parametrize(
+    "valor",
+    [
+        {"largura": "1280", "altura": 720},
+        {"largura": 0, "altura": 720},
+        {"largura": 1280},
+        "1280x720",
+    ],
+)
+def test_AC_001_2_resolucao_de_tipo_invalido_e_rejeitada(valor):
+    dados = deepcopy(CAMERA_VALIDA)
+    dados["resolucao"] = valor
+
+    with pytest.raises(ValidationError) as erro:
+        Camera(**dados)
+
+    assert all(loc[0] == "resolucao" for loc in locs(erro.value))
+    assert "resolucao" in str(erro.value)
+
+
+def test_AC_002_2_linha_fora_da_resolucao_declarada_e_rejeitada():
+    dados = deepcopy(CAMERA_VALIDA)
+    dados["resolucao"] = {"largura": 1280, "altura": 720}
+
+    # x == largura é o primeiro pixel fora do frame
+    fora = deepcopy(dados)
+    fora["linha"]["p2"]["x"] = 1280
+    with pytest.raises(ValidationError) as erro:
+        Camera(**fora)
+    mensagem = str(erro.value)
+    assert "p2.x=1280" in mensagem
+    assert "1280x720" in mensagem
+
+    # x == largura - 1 ainda cabe
+    dentro = deepcopy(dados)
+    dentro["linha"]["p2"]["x"] = 1279
+    assert Camera(**dentro).linha.p2.x == 1279
 
 
 def test_id_com_zeros_a_esquerda_sobrevive_a_serializacao():

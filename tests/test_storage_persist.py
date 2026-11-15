@@ -41,6 +41,7 @@ VERSAO_DO_MODELO = "yolo11n.onnx@abc123def456"
 
 def camera() -> Camera:
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id=ID_CAMERA,
         nome="Praça Exemplo",
         sentido_a=SENTIDO_A,

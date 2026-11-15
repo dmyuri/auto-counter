@@ -16,7 +16,11 @@ import pytest
 from auto_counter.capture.status import StatusDaSessao
 from auto_counter.counting.config import Categoria
 from auto_counter.pipeline.lock import adquirir_trava
-from auto_counter.pipeline.state import AnotadorDoEstado, Fase
+from auto_counter.pipeline.state import (
+    MENSAGEM_SESSAO_CANCELADA,
+    AnotadorDoEstado,
+    Fase,
+)
 from auto_counter.pipeline.stop import NOME_DO_PEDIDO
 from auto_counter.storage.connection import conectar
 from tests.export_helpers import ID_SESSAO, gravar_sessao
@@ -214,7 +218,7 @@ def test_AC_012_4_encerrar_so_pede_a_parada_depois_da_confirmacao(data_dir):
         at = clica(at, "Parar antecipadamente")
         # O primeiro clique só pergunta.
         assert not (data_dir / NOME_DO_PEDIDO).exists()
-        assert "Os minutos já capturados serão processados" in textos(at)
+        assert "A sessão será cancelada" in textos(at)
         assert "Confirmar encerramento" in botoes(at)
 
         at = clica(at, "Voltar")
@@ -238,7 +242,11 @@ def test_AC_012_4_o_aviso_de_encerrar_no_processamento_fala_em_cancelar(data_dir
         at = clica(at, "Parar antecipadamente")
 
     assert "A contagem será cancelada" in textos(at)
-    assert "vídeos serão mantidos" in textos(at)
+    assert (
+        "Encerrar agora? A contagem será cancelada e a sessão será finalizada."
+        in textos(at)
+    )
+    assert "reprocessar" not in textos(at)
 
 
 def test_AC_012_5_processamento_cancelado_informa_e_nao_oferece_download(data_dir):
@@ -251,8 +259,12 @@ def test_AC_012_5_processamento_cancelado_informa_e_nao_oferece_download(data_di
 
     at = abre_a_interface()
 
-    assert any("Processamento cancelado" in i.value for i in at.info)
-    assert "session process" in textos(at)
+    # A interface não manda reprocessar: o comando é do terminal, e a mensagem
+    # do estado, com `session process`, continua só na saída do `session run`.
+    assert [i.value for i in at.info if "Processamento cancelado" in i.value] == [
+        "Processamento cancelado. Inicie uma nova sessão."
+    ]
+    assert "session process" not in textos(at)
     assert downloads(at) == []
 
 
@@ -504,3 +516,54 @@ def test_AC_018_4_processo_morto_nao_mostra_metricas_nem_tempo(data_dir, relogio
     assert any("terminou sem concluir" in e.value for e in at.error)
     assert at.metric == []
     assert "Tempo" not in textos(at)
+
+
+# --- AC-012.7: sessão cancelada pelo usuário na captura ---
+
+
+def cancelada_na_captura(data_dir, fim: datetime | None = None) -> None:
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        **({} if fim is None else {"agora": lambda: fim}),
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.terminar(
+        Fase.SESSAO_CANCELADA,
+        id_sessao=ID_SESSAO,
+        status="COMPLETA",
+        mensagem=MENSAGEM_SESSAO_CANCELADA,
+    )
+
+
+def test_AC_018_3_sessao_cancelada_na_captura_mostra_so_o_tempo_total(
+    data_dir, relogio
+):
+    cancelada_na_captura(data_dir, fim=INICIO + timedelta(minutes=2, seconds=30))
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert at.metric == []
+    assert "Tempo total: 02:30" in textos(at)
+
+
+def test_AC_012_7_sessao_cancelada_nao_oferece_download_nem_reprocessar(
+    data_dir, relogio
+):
+    cancelada_na_captura(data_dir)
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert any("Sessão cancelada pelo usuário" in i.value for i in at.info)
+    assert downloads(at) == []
+    texto = textos(at).lower()
+    assert "session process" not in texto
+    assert "reprocess" not in texto

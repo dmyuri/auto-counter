@@ -1,7 +1,8 @@
 """A linha de sessão: abrir, fechar a captura, completar o processamento —
 T-03.
 
-Comportamento em `.spec/features/persistencia-resultados/spec.md`: AC-008.1.
+Comportamento em `.spec/features/persistencia-resultados/spec.md`: AC-008.1 e
+AC-008.6 (a marca de sessão cancelada pelo usuário).
 
 D-1 (`.spec/features/persistencia-resultados/_tasks.md`) dá os três momentos
 do ciclo de vida de uma sessão no banco: `abrir_sessao` no início da captura,
@@ -24,6 +25,7 @@ from auto_counter.storage.sessions import (
     completar_processamento,
     fechar_captura,
     ler_sessao,
+    marcar_sessao_cancelada,
 )
 
 ID_SESSAO = "000013-20260101T080000Z"
@@ -247,3 +249,93 @@ def test_completar_processamento_de_sessao_inexistente_erra_citando_o_id(tmp_pat
 def test_ler_sessao_inexistente_devolve_none(tmp_path):
     with conectar(tmp_path) as conexao:
         assert ler_sessao(conexao, "sessao-que-nao-existe") is None
+
+
+# --- processamento-upload: origem e vídeos da sessão (SUP-096) ---
+
+from auto_counter.storage.model import OrigemDaSessao, VideoGravado  # noqa: E402
+from auto_counter.storage.sessions import gravar_videos  # noqa: E402
+
+
+def _videos():
+    return (
+        VideoGravado(2, "segundo.mov", 45, "b" * 64, 4, 4),
+        VideoGravado(1, "primeiro.mp4", 130, "a" * 64, 1, 3),
+    )
+
+
+def test_AC_030_1_videos_da_sessao_ida_e_volta_em_ordem_de_posicao(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, origem=OrigemDaSessao.UPLOAD)
+        gravar_videos(conexao, ID_SESSAO, _videos())
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.origem is OrigemDaSessao.UPLOAD
+    assert sessao.videos == (
+        VideoGravado(1, "primeiro.mp4", 130, "a" * 64, 1, 3),
+        VideoGravado(2, "segundo.mov", 45, "b" * 64, 4, 4),
+    )
+
+
+def test_AC_030_1_regravar_os_videos_nao_duplica(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao, origem=OrigemDaSessao.UPLOAD)
+        gravar_videos(conexao, ID_SESSAO, _videos())
+        gravar_videos(conexao, ID_SESSAO, _videos())
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert len(sessao.videos) == 2
+
+
+def test_AC_030_1_sessao_ao_vivo_tem_origem_camera_e_nenhum_video(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao)
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.origem is OrigemDaSessao.CAMERA
+    assert sessao.videos == ()
+
+
+# --- AC-008.6: sessão cancelada pelo usuário na captura ---
+
+
+def test_AC_008_6_marcar_sessao_cancelada_grava_a_marca_sem_eventos_nem_agregados(
+    tmp_path,
+):
+    from auto_counter.storage.events import ler_eventos
+    from auto_counter.storage.minutes import ler_agregados
+
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao)
+        fechar_captura(
+            conexao,
+            ID_SESSAO,
+            inicio=INICIO,
+            fim=FIM,
+            duracao_real=5,
+            encerrada_pelo_usuario=False,
+            status=StatusDaSessao.COMPLETA,
+            minutos_perdidos=[],
+        )
+        assert ler_sessao(conexao, ID_SESSAO).cancelada_pelo_usuario is False
+
+        marcar_sessao_cancelada(conexao, ID_SESSAO)
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+        eventos = ler_eventos(conexao, ID_SESSAO)
+        agregados = ler_agregados(conexao, ID_SESSAO)
+
+    assert sessao.cancelada_pelo_usuario is True
+    # A marca é campo próprio: o status continua um dos três de AC-004.4 a AC-004.6.
+    assert sessao.status is StatusDaSessao.COMPLETA
+    assert eventos == ()
+    assert agregados == ()
+
+
+def test_AC_008_6_marcar_sessao_inexistente_e_erro_explicito(tmp_path):
+    with conectar(tmp_path) as conexao:
+        with pytest.raises(SessaoInexistenteError, match="fantasma"):
+            marcar_sessao_cancelada(conexao, "fantasma")

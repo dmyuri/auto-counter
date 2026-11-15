@@ -34,6 +34,7 @@ BASE_URL_DE_TESTE = "https://exemplo.invalido/videos"
 def camera_000013() -> Camera:
     """A câmera do MVP, com id string de zeros à esquerda (SUP-001)."""
     return Camera(
+        resolucao={"largura": 64, "altura": 48},
         id="000013",
         nome="Local de teste",
         sentido_a="sentido A",

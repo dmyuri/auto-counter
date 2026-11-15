@@ -6,3 +6,4 @@ sentido_b: "sentido B"
 linha:
   p1: {x: 500, y: 100}
   p2: {x: 500, y: 600}
+resolucao: {largura: 1280, altura: 720}

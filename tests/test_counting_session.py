@@ -80,6 +80,7 @@ CRUZA_PARA_A_ESQUERDA = (DIREITA, ESQUERDA)
 def camera() -> Camera:
     """A câmera do teste, com os rótulos de sentido dela (AC-001.1)."""
     return Camera(
+        resolucao={"largura": 1280, "altura": 720},
         id=ID_CAMERA,
         nome="Praça Renascença",
         sentido_a="CENTRO",
@@ -380,6 +381,37 @@ class ParadaDuble:
 
     def foi_pedida(self) -> bool:
         return self.pedida
+
+
+class ParadaPedidaDepoisDeNChamadas:
+    """A parada de AC-012.5 chegando com o detector já em ação (SUP-108)."""
+
+    def __init__(self, detector, chamadas: int) -> None:
+        self._detector = detector
+        self._chamadas = chamadas
+
+    def foi_pedida(self) -> bool:
+        return self._detector.chamadas >= self._chamadas
+
+
+def test_AC_012_5_parada_pedida_durante_o_ultimo_clipe_cancela_o_processamento(
+    tmp_path,
+):
+    """Um clipe só: nenhuma consulta entre clipes chegaria a ver o pedido.
+
+    O pedido chega depois do primeiro frame analisado, com o único clipe da
+    sessão em andamento. Sem consulta dentro do clipe, a sessão terminaria como
+    concluída e gravaria o `eventos.json`.
+    """
+    dir_sessao = monta_sessao(tmp_path, minutos_capturados=(1,))
+    detector = DetectorDuble(roteiro_do_clipe(CRUZA_PARA_A_ESQUERDA))
+    parada = ParadaPedidaDepoisDeNChamadas(detector, chamadas=1)
+
+    with pytest.raises(ProcessamentoCancelado):
+        processa(dir_sessao, detector, parada=parada)
+
+    assert detector.chamadas == 1
+    assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
 
 
 def test_AC_012_2_o_gancho_recebe_cada_minuto_capturado_resolvido(tmp_path):

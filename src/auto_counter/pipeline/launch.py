@@ -16,13 +16,17 @@ A trava de sessão única é pega pelo **filho**. Aqui ela só é consultada, pa
 recusar cedo e sem disparar nada; a corrida entre dois disparos simultâneos é
 resolvida pela criação exclusiva da trava, e o segundo filho sai com código 1
 sem tocar no estado da sessão em curso.
+
+Por `processamento-upload` (D-13, D-16), `iniciar_upload` dispara
+`session upload` do mesmo modo, com os vídeos já recebidos e o nome original de
+cada um (`--nome`), e `aguardar_inicio` reconhece a trava pelo comando pedido.
 """
 
 import os
 import subprocess
 import sys
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -83,6 +87,56 @@ def iniciar_sessao(
     vídeos é o processo destacado, não esta função.
     """
     duracao = validar_duracao(minutos)
+    comando = [
+        "run",
+        id_camera,
+        "--minutes",
+        str(duracao),
+        "--config-dir",
+        str(config_dir),
+    ]
+    if manter_videos:
+        comando.append("--keep-clips")
+    return _disparar(id_camera, data_dir, "run", comando, popen)
+
+
+def iniciar_upload(
+    id_camera: str,
+    arquivos: Sequence[str | Path],
+    nomes: Sequence[str],
+    *,
+    data_dir: str | Path,
+    config_dir: str | Path,
+    popen: Callable[..., subprocess.Popen] = subprocess.Popen,
+) -> SessaoDisparada:
+    """Dispara `session upload` num processo destacado (AC-028.1, D-13).
+
+    `arquivos` são as cópias recebidas pela interface e `nomes` os nomes
+    originais, na mesma ordem. Lista vazia ou de tamanhos diferentes levanta
+    `ValueError`, e sessão em curso levanta `OutraSessaoEmAndamentoError`
+    (AC-028.2); nos dois casos nada é disparado.
+    """
+    if not arquivos:
+        raise ValueError("nenhum vídeo para processar")
+    if len(arquivos) != len(nomes):
+        raise ValueError(
+            f"{len(arquivos)} arquivo(s) para {len(nomes)} nome(s) original(is)"
+        )
+    comando = ["upload", id_camera, *(str(arquivo) for arquivo in arquivos)]
+    for nome in nomes:
+        comando += ["--nome", nome]
+    comando += ["--config-dir", str(config_dir)]
+    return _disparar(id_camera, data_dir, "upload", comando, popen)
+
+
+def _disparar(
+    id_camera: str,
+    data_dir: str | Path,
+    prefixo_do_log: str,
+    argumentos: list[str],
+    popen: Callable[..., subprocess.Popen],
+) -> SessaoDisparada:
+    """O que `iniciar_sessao` e `iniciar_upload` têm em comum."""
     data_dir = Path(data_dir)
 
     em_curso = ler_trava(data_dir)
@@ -94,7 +148,7 @@ def iniciar_sessao(
     consumir_pedido(data_dir)
 
     carimbo = datetime.now(timezone.utc).strftime(FORMATO_DO_CARIMBO)
-    log = data_dir / SUBDIRETORIO_DE_LOGS / f"run-{carimbo}.log"
+    log = data_dir / SUBDIRETORIO_DE_LOGS / f"{prefixo_do_log}-{carimbo}.log"
     log.parent.mkdir(parents=True, exist_ok=True)
 
     ambiente = dict(os.environ)
@@ -102,20 +156,7 @@ def iniciar_sessao(
     ambiente["PYTHONUTF8"] = "1"
     ambiente["PYTHONIOENCODING"] = "utf-8"
 
-    comando = [
-        sys.executable,
-        "-m",
-        "auto_counter",
-        "session",
-        "run",
-        id_camera,
-        "--minutes",
-        str(duracao),
-        "--config-dir",
-        str(config_dir),
-    ]
-    if manter_videos:
-        comando.append("--keep-clips")
+    comando = [sys.executable, "-m", "auto_counter", "session", *argumentos]
     with open(log, "wb") as saida:
         processo = popen(
             comando,
@@ -146,6 +187,7 @@ def aguardar_inicio(
     intervalo: float = 0.1,
     dormir: Callable[[float], None] = time.sleep,
     relogio: Callable[[], float] = time.monotonic,
+    comando: str = "run",
 ) -> str | None:
     """Espera a sessão assumir a trava. `None` é sucesso; texto é o motivo.
 
@@ -163,7 +205,7 @@ def aguardar_inicio(
         trava = ler_trava(disparada.data_dir)
         if (
             trava is not None
-            and trava.comando == "run"
+            and trava.comando == comando
             and trava.id_camera == disparada.id_camera
         ):
             return None

@@ -188,3 +188,57 @@ def test_list_e_export_funcionam_com_a_trava_presa(runner, data_dir):
     # O export falha por não haver banco, e não por causa da trava.
     assert exportacao.exit_code == 1
     assert "já existe uma sessão em andamento" not in exportacao.output
+
+
+def envio(runner, registro, arquivo):
+    return runner.invoke(
+        app,
+        ["session", "upload", "000013", str(arquivo), "--config-dir", str(registro)],
+    )
+
+
+def test_AC_028_2_session_upload_recusado_com_sessao_em_andamento(
+    runner, registro, data_dir, modelo, detector, tmp_path
+):
+    from tests.test_cli_session_upload import escreve_video
+
+    video = escreve_video(tmp_path / "um.mp4")
+    data_dir.mkdir(parents=True, exist_ok=True)
+    estado_anterior = b'{"pid": 1, "fase": "CAPTURA"}'
+    (data_dir / "sessao_atual.json").write_bytes(estado_anterior)
+
+    with sessao_em_curso(data_dir):
+        resultado = envio(runner, registro, video)
+
+    assert resultado.exit_code == 1
+    assert "Outro local" in resultado.output
+    assert "07/09/2026 08:00" in resultado.output
+    assert "Traceback" not in resultado.output
+    # A sessão em andamento não é afetada, e nada do upload é tocado.
+    assert (data_dir / "sessao_atual.json").read_bytes() == estado_anterior
+    assert video.is_file()
+    assert not (data_dir / "sessions").exists()
+    assert detector.chamadas == 0
+
+
+def test_AC_028_2_session_run_recusado_com_upload_em_andamento(
+    runner, registro, data_dir, sem_rede
+):
+    data_dir.mkdir(parents=True, exist_ok=True)
+
+    with adquirir_trava(
+        data_dir,
+        comando="upload",
+        id_camera="000042",
+        nome_camera="Outro local",
+        agora=lambda: INICIO_DA_OUTRA,
+    ):
+        resultado = runner.invoke(
+            app,
+            ["session", "run", "000013", "--minutes", "1",
+             "--config-dir", str(registro)],
+        )
+
+    assert resultado.exit_code == 1
+    assert "Outro local" in resultado.output
+    assert "Traceback" not in resultado.output

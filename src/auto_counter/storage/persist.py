@@ -19,6 +19,11 @@ Dentro da transação, os eventos e os agregados da sessão são **apagados ante
 de inseridos de novo** (D-7 de `_tasks.md`) — é o que garante AC-008.5 também
 para uma sessão que encolheu entre duas execuções, o que
 `ON CONFLICT ... DO UPDATE` sozinho não cobre.
+
+`persistir_sessao_de_upload` (`processamento-upload`, T-10) é o equivalente para
+a sessão de upload: lê o `upload.json` e o `eventos.json`, e grava pela regra de
+D-9 (origem UPLOAD, duração M, minutos sem dado como minutos perdidos). A
+persistência da sessão ao vivo não muda.
 """
 
 import sqlite3
@@ -29,14 +34,18 @@ from pathlib import Path
 from auto_counter.cameras.model import Camera
 from auto_counter.capture import manifest as manifest_da_captura
 from auto_counter.capture.manifest import FORMATO_DO_ID_DE_SESSAO
+from auto_counter.capture.status import classificar
 from auto_counter.counting import events as eventos_da_contagem
 from auto_counter.storage.events import gravar_eventos
 from auto_counter.storage.minutes import agregar, gravar_agregados
+from auto_counter.storage.model import OrigemDaSessao, VideoGravado
 from auto_counter.storage.sessions import (
     abrir_sessao,
     completar_processamento,
     fechar_captura,
+    gravar_videos,
 )
+from auto_counter.upload import manifest as registro_do_upload
 
 
 class SessaoAindaEmCapturaError(RuntimeError):
@@ -185,6 +194,118 @@ def persistir_sessao(
 
     return ResumoPersistido(
         id_sessao=manifest.id_sessao,
+        eventos_gravados=len(registro.eventos),
+        minutos_capturados=len(registro.minutos_processados),
+        minutos_sem_dado=sum(
+            1 for item in agregados if item.estado.value == "SEM_DADO"
+        ),
+    )
+
+
+def persistir_sessao_de_upload(
+    conexao: sqlite3.Connection,
+    dir_sessao: str | Path,
+    *,
+    camera: Camera,
+    inicio: datetime,
+    fim: datetime,
+) -> ResumoPersistido:
+    """Grava a sessão de upload do `upload.json` e do `eventos.json` (D-9).
+
+    `inicio` e `fim` são o início e o término do processamento (SUP-100), e
+    `inicio` também é a `criada_em` da linha: não se usa o relógio do id de
+    sessão, que é da captura. A duração pedida e a real são M, o total de
+    minutos da sessão (SUP-093), e os minutos perdidos são os minutos sem dado
+    por falha de leitura (SUP-095), que alimentam `classificar` (AC-030.4).
+    Tudo numa transação só, como `persistir_sessao`.
+    """
+    dir_sessao = Path(dir_sessao)
+    do_upload = registro_do_upload.ler(dir_sessao)
+
+    caminho_eventos = dir_sessao / eventos_da_contagem.NOME_DO_ARQUIVO_DE_EVENTOS
+    try:
+        registro = eventos_da_contagem.ler(dir_sessao)
+    except FileNotFoundError as falha:
+        raise EventosAusentesError(caminho_eventos) from falha
+
+    minutos = do_upload.duracao_minutos
+    sem_dado = sorted(item.minuto for item in registro.minutos_nao_processados)
+    status = classificar(minutos, sem_dado).status
+    agregados = agregar(
+        registro.eventos,
+        duracao_real=minutos,
+        minutos_processados=registro.minutos_processados,
+        minutos_nao_processados=registro.minutos_nao_processados,
+        sentido_a=camera.sentido_a,
+        sentido_b=camera.sentido_b,
+    )
+
+    conexao.execute("BEGIN")
+    try:
+        abrir_sessao(
+            conexao,
+            id_sessao=do_upload.id_sessao,
+            id_camera=do_upload.id_camera,
+            criada_em=inicio,
+            duracao_pedida=minutos,
+            sentido_a=camera.sentido_a,
+            sentido_b=camera.sentido_b,
+            nome_camera=camera.nome,
+            origem=OrigemDaSessao.UPLOAD,
+            comitar=False,
+        )
+        fechar_captura(
+            conexao,
+            do_upload.id_sessao,
+            inicio=inicio,
+            fim=fim,
+            duracao_real=minutos,
+            encerrada_pelo_usuario=False,
+            status=status,
+            minutos_perdidos=sem_dado,
+            comitar=False,
+        )
+        completar_processamento(
+            conexao,
+            do_upload.id_sessao,
+            versao_do_modelo=registro.versao_do_modelo,
+            amostragem=registro.configuracao.frames_por_segundo,
+            limiar_de_confianca=registro.configuracao.limiar_de_confianca,
+            comitar=False,
+        )
+
+        conexao.execute(
+            "DELETE FROM evento WHERE id_sessao = ?", (do_upload.id_sessao,)
+        )
+        conexao.execute(
+            "DELETE FROM minuto WHERE id_sessao = ?", (do_upload.id_sessao,)
+        )
+        gravar_eventos(conexao, do_upload.id_sessao, registro.eventos)
+        gravar_agregados(conexao, do_upload.id_sessao, agregados)
+        gravar_videos(
+            conexao,
+            do_upload.id_sessao,
+            [
+                VideoGravado(
+                    posicao=video.posicao,
+                    nome_original=video.nome_original,
+                    duracao_segundos=video.duracao_segundos,
+                    sha256=video.sha256,
+                    minuto_inicial=video.minuto_inicial,
+                    minuto_final=video.minuto_final,
+                )
+                for video in do_upload.videos
+            ],
+            comitar=False,
+        )
+    except Exception:
+        conexao.rollback()
+        raise
+    else:
+        conexao.commit()
+
+    return ResumoPersistido(
+        id_sessao=do_upload.id_sessao,
         eventos_gravados=len(registro.eventos),
         minutos_capturados=len(registro.minutos_processados),
         minutos_sem_dado=sum(

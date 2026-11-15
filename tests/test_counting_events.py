@@ -213,3 +213,133 @@ def test_gravacao_e_atomica_e_nao_deixa_temporario_para_tras(tmp_path):
     registro().gravar(tmp_path)
     registro().gravar(tmp_path)
     assert sorted(item.name for item in tmp_path.iterdir()) == ["eventos.json"]
+
+
+# --- processamento-upload: vídeo de origem e deslocamento (SUP-100) ---
+
+
+def evento_de_upload(*, video: int = 2, deslocamento: int = 75) -> Evento:
+    return Evento(
+        timestamp=INICIO + timedelta(seconds=deslocamento),
+        categoria=Categoria.CARRO,
+        sentido="CENTRO",
+        id_de_rastreio="4:9",
+        confianca=0.8,
+        minuto=5,
+        indice_do_frame=750,
+        posicao_na_linha=0.5,
+        video=video,
+        deslocamento_segundos=deslocamento,
+    )
+
+
+def test_SUP_100_evento_de_upload_ida_e_volta_pelo_eventos_json(tmp_path):
+    original = registro(
+        configuracao=ConfiguracaoDoProcessamento(frames_por_segundo=5),
+        eventos=(evento_de_upload(),),
+    )
+
+    lido = ler(original.gravar(tmp_path).parent)
+
+    [item] = lido.eventos
+    assert item.video == 2
+    assert item.deslocamento_segundos == 75
+    assert lido.eventos == original.eventos
+    assert lido.configuracao.frames_por_segundo == 5
+    gravado = json.loads((tmp_path / "eventos.json").read_text(encoding="utf-8"))
+    assert gravado["versao"] == 2
+    assert gravado["configuracao"]["frames_por_segundo"] == 5
+
+
+def test_SUP_100_evento_ao_vivo_continua_sem_video_nem_deslocamento(tmp_path):
+    lido = ler(registro().gravar(tmp_path).parent)
+
+    [item] = lido.eventos
+    assert item.video is None
+    assert item.deslocamento_segundos is None
+
+
+def test_SUP_100_video_sem_deslocamento_e_recusado():
+    with pytest.raises(ValueError) as erro:
+        Evento(
+            timestamp=INICIO,
+            categoria=Categoria.CARRO,
+            sentido="CENTRO",
+            id_de_rastreio="1:1",
+            confianca=0.9,
+            minuto=1,
+            indice_do_frame=0,
+            posicao_na_linha=0.5,
+            video=1,
+        )
+    assert "SUP-100" in str(erro.value)
+
+
+def test_SUP_100_deslocamento_sem_video_e_recusado():
+    with pytest.raises(ValueError) as erro:
+        Evento(
+            timestamp=INICIO,
+            categoria=Categoria.CARRO,
+            sentido="CENTRO",
+            id_de_rastreio="1:1",
+            confianca=0.9,
+            minuto=1,
+            indice_do_frame=0,
+            posicao_na_linha=0.5,
+            deslocamento_segundos=3,
+        )
+    assert "SUP-100" in str(erro.value)
+
+
+def test_SUP_100_video_menor_que_1_e_recusado():
+    with pytest.raises(ValueError) as erro:
+        evento_de_upload(video=0)
+    assert "SUP-100" in str(erro.value)
+
+
+def test_SUP_100_deslocamento_negativo_e_recusado():
+    with pytest.raises(ValueError) as erro:
+        evento_de_upload(deslocamento=-1)
+    assert "SUP-100" in str(erro.value)
+
+
+def test_eventos_json_versao_1_continua_legivel(tmp_path):
+    (tmp_path / "eventos.json").write_text(
+        json.dumps(
+            {
+                "versao": 1,
+                "id_sessao": "000013-20260304T123000Z",
+                "id_camera": "000013",
+                "configuracao": {
+                    "limiar_de_confianca": 0.35,
+                    "amostragem": 3,
+                    "tamanho_de_entrada": 640,
+                    "janela_de_emenda_em_segundos": 2.0,
+                    "tolerancia_da_assinatura": 0.1,
+                    "versao_do_modelo": VERSAO_DO_MODELO,
+                },
+                "minutos_processados": [1],
+                "minutos_nao_processados": [],
+                "eventos": [
+                    {
+                        "timestamp": INICIO.isoformat(),
+                        "categoria": "CARRO",
+                        "sentido": "CENTRO",
+                        "id_de_rastreio": "1:17",
+                        "confianca": 0.87,
+                        "minuto": 1,
+                        "indice_do_frame": 900,
+                        "posicao_na_linha": 0.42,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    lido = ler(tmp_path)
+
+    [item] = lido.eventos
+    assert item.video is None
+    assert item.deslocamento_segundos is None
+    assert lido.configuracao.frames_por_segundo == 10

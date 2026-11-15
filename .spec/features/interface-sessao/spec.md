@@ -124,9 +124,18 @@ Critérios de aceite:
   > Ver `.spec/features/layout-interface/spec.md`.
 
   AC-012.5 — Dado uma sessão em processamento, quando o usuário a encerra
-  explicitamente, então a contagem para, nenhum resultado de contagem é gravado,
-  os vídeos da sessão permanecem em disco para reprocessamento e a interface
-  informa que o processamento foi cancelado, sem oferecer download.
+  explicitamente, então a contagem para sem terminar o clipe em análise, nenhum
+  resultado de contagem é gravado, inclusive quando o pedido chega durante o
+  último clipe, os vídeos da sessão permanecem em disco para reprocessamento e a
+  interface informa que o processamento foi cancelado, sem oferecer download.
+  > **Alterado em 2026-11-14:** "Dado uma sessão em processamento, quando o
+  > usuário a encerra explicitamente, então a contagem para, nenhum resultado de
+  > contagem é gravado, os vídeos da sessão permanecem em disco para
+  > reprocessamento e a interface informa que o processamento foi cancelado, sem
+  > oferecer download." Motivo: o critério não dizia quando a contagem para; a
+  > parada era consultada só entre clipes, o usuário esperava o fim do clipe em
+  > análise e o pedido feito durante o último clipe era ignorado, terminando a
+  > sessão como concluída, com planilha.
   > **Alterado por:** feature `acompanhamento-ao-vivo`, em 2026-11-07.
   > O resultado da sessão cancelada passa a exibir o tempo total da sessão, sem
   > nenhuma quantidade de veículos e sem download, e as quantidades parciais
@@ -150,6 +159,14 @@ Critérios de aceite:
   > O aviso de que não há planilha passa a aparecer no painel de resultados,
   > sem cartão de planilha (AC-023.4).
   > Ver `.spec/features/layout-interface/spec.md`.
+
+  AC-012.7 — Dado uma sessão em captura iniciada pela interface, quando o
+  usuário a encerra pelo botão "Parar antecipadamente" (AC-023.1), então a
+  captura para, nenhum minuto segue para a contagem, os clipes já capturados são
+  apagados do disco seja qual for a opção de manter os vídeos, o registro da
+  sessão continua no banco marcado como cancelado pelo usuário (AC-008.6 de
+  `persistencia-resultados`) e a interface informa "Sessão cancelada pelo
+  usuário", sem oferecer download nem reprocessamento.
 
 US-013 — Uma sessão por vez
 Como integrante do projeto de extensão, quero que o sistema recuse iniciar uma
@@ -205,6 +222,32 @@ Critérios de aceite:
 - [x] SUP-052 — A trava de sessão única vale para todo comando que baixa ou
   processa vídeo: `session run`, `session capture` e `session process`. Afeta
   AC-013.1 e AC-013.2.
+- [x] SUP-108 — No processamento, o pedido de parada é consultado a cada frame
+  amostrado, e não só antes de cada clipe, como já acontece no upload (D-12 do
+  `_tasks.md` de `processamento-upload`). A consulta só entre clipes fazia o
+  usuário esperar até o fim do clipe em análise e deixava passar o pedido feito
+  durante o último clipe, que terminava como sessão concluída, com planilha.
+  Confirmado pelo autor. Afeta AC-012.5.
+  > **Corrigido em 2026-11-15:** a referência ao upload está errada. A D-12 do
+  > `_tasks.md` de `processamento-upload` consulta a parada antes de cada vídeo
+  > e no início de cada minuto dentro dele, e não a cada frame amostrado, e o
+  > código segue a D-12. O upload tem, portanto, o mesmo defeito que esta SUP
+  > corrigiu na sessão ao vivo: o usuário espera o fim do minuto em análise, e
+  > o pedido feito durante o último minuto do último vídeo é ignorado, terminando
+  > a sessão como concluída, com planilha. Isso contraria AC-029.1 de
+  > `processamento-upload`, que remete a AC-012.5.
+- [x] SUP-110 — `session process <id>` recusa a sessão marcada como cancelada
+  na captura: sai com erro dizendo que a sessão foi cancelada pelo usuário e
+  não tem vídeos para processar, e nada é processado nem gravado. Se a marca
+  não chegou ao banco (SUP-111), o comando segue e a sessão termina sem
+  planilha, porque os vídeos não existem; consequência aceita. Confirmado pelo
+  autor. Afeta AC-012.7.
+- [x] SUP-111 — No cancelamento da captura, se o banco falhar ao gravar a marca
+  de cancelada, ou não tiver sido aberto durante a captura, o sistema só avisa
+  no log e segue: apaga os clipes e termina como "Sessão cancelada pelo
+  usuário". É a mesma regra da captura, em que falha de banco não derruba a
+  sessão; o registro pode ficar sem a marca. Confirmado pelo autor. Afeta
+  AC-012.7.
 
 ## Perguntas em aberto
 
@@ -215,7 +258,9 @@ Nenhuma pendente. Os IDs permanecem como histórico das decisões.
   interface, o que virou AC-012.4. Interromper passou a exigir ação explícita, e
   só então vale a regra de AC-003.6 de `captura-clipes`. A alternativa —
   encerrar ao fechar — deixaria um fechamento acidental custar minutos de captura
-  que a URL não permite recuperar.
+  que a URL não permite recuperar. Revista por Q-026: pela interface, a ação
+  explícita na captura passou a cancelar a sessão (AC-012.7), e AC-003.6 ficou
+  só para o terminal.
 - [x] Q-009 — Uma sessão sem nenhum clipe processável tem planilha?
   **Respondida: não.** A D-6 de `exportacao-xlsx` continua valendo, e a interface
   exibe o status e informa que não há planilha, o que virou AC-012.6.
@@ -225,6 +270,20 @@ Nenhuma pendente. Os IDs permanecem como histórico das decisões.
   deixaria a sessão sem como ser refeita.
 - [x] Q-011 — A trava de sessão única vale para quais comandos? **Respondida:
   todo comando que baixa ou processa vídeo**, o que virou SUP-052.
+- [x] Q-026 — O que "Parar antecipadamente" faz na fase de captura?
+  **Respondida: cancela a sessão inteira.** Até então valia AC-003.6: a captura
+  parava e os minutos já capturados seguiam para a contagem. O autor decidiu que,
+  pela interface, parar encerra tudo e não inicia a contagem. Decidido junto:
+  - vale só para o botão da interface. O Ctrl+C no terminal continua com
+    AC-003.6;
+  - os clipes já capturados são apagados, seja qual for a opção de manter os
+    vídeos, e a sessão não pode ser reprocessada;
+  - o registro da sessão fica no banco, marcado como cancelado pelo usuário
+    (AC-008.6 de `persistencia-resultados`);
+  - o desfecho é próprio, "Sessão cancelada pelo usuário", distinto do
+    processamento cancelado de AC-012.5, que continua mantendo os vídeos.
+
+  Virou AC-012.7.
 
 ## Specs afetadas
 
@@ -237,13 +296,26 @@ Revisado história por história.
 - `captura-clipes` — AC-011.2 impõe na interface o mesmo limite de 1 a 15 minutos
   já validado em AC-003.3; AC-012.1 exibe os minutos perdidos de AC-004.5 e
   AC-004.6. AC-012.4 e AC-003.6 passaram a se encaixar: fechar a aba não é
-  interrupção, e só a ação explícita aciona a sessão de duração real.
+  interrupção, e só a ação explícita aciona a sessão de duração real. Com
+  AC-012.7, AC-003.6 deixa de valer para a interface e fica só para o Ctrl+C no
+  terminal.
 - `contagem-veiculos` — AC-012.2 expõe a segunda fase, cujo tempo é limitado por
   AC-005.4; se o orçamento de performance for renegociado por SUP-017, a espera
   que a interface anuncia muda junto. AC-012.5 exige que o processamento possa
-  ser interrompido entre dois minutos sem gravar resultado.
+  ser interrompido no meio do clipe em análise, e não só entre dois minutos, sem
+  gravar resultado (SUP-108).
 - `persistencia-resultados` — AC-012.3 mostra o status gravado em AC-008.1, e
-  AC-012.4 depende de esse registro existir desde o início da captura.
+  AC-012.4 depende de esse registro existir desde o início da captura. AC-012.7
+  mantém o registro da sessão cancelada na captura com a marca de AC-008.6, e o
+  histórico de AC-009.2 passa a mostrar essa marca.
+- `layout-interface` — AC-023.1 passa a encerrar a captura pela regra de
+  AC-012.7, e não mais pela de AC-003.6. AC-023.4 ganha o desfecho da sessão
+  cancelada na captura.
+- `acompanhamento-ao-vivo` — AC-018.3 passa a valer também para a sessão
+  cancelada na captura: só o tempo total, sem quantidades.
+- `download-clipes` — AC-025.6 passa a valer também para a sessão cancelada na
+  captura: sem lista de clipes, porque eles foram apagados mesmo com a opção
+  ligada.
 - `exportacao-xlsx` — AC-012.3 entrega o arquivo produzido por AC-010.1. Como
   Q-005 manteve a geração de planilha para sessão INVÁLIDA, aquele critério não
   precisa de caminho alternativo para sessão com clipes processados. A sessão

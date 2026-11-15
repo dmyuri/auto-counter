@@ -1,0 +1,9 @@
+# Camera completa, mas sem a resolucao de calibracao (SUP-086, AC-001.2).
+# O unico campo que falta e `resolucao`.
+id: "000077"
+nome: "Camera sem resolucao de calibracao"
+sentido_a: "sentido A"
+sentido_b: "sentido B"
+linha:
+  p1: {x: 120, y: 400}
+  p2: {x: 1160, y: 420}

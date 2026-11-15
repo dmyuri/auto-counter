@@ -359,3 +359,205 @@ def test_falha_ao_persistir_nao_apaga_os_videos_da_sessao(
     assert "reprocessada" in resultado.output
     # Nenhum clipe foi apagado: a falha aconteceu antes do descarte (D-3).
     assert videos(dir_sessao) == ["minuto-01.mp4", "minuto-02.mp4"]
+
+
+# --- processamento-upload: `session process` numa sessão de upload (T-15) -----
+#
+# AC-029.3 (a sessão cancelada é processada desde o primeiro vídeo e gravada como
+# a de upload concluída), AC-030.6 (os vídeos são apagados depois de gravar),
+# AC-028.2 (a trava) e D-14 do `_tasks.md`. A sessão cancelada é produzida pelo
+# próprio pipeline de upload, com a parada pedida antes do primeiro minuto.
+
+ID_SESSAO_DO_UPLOAD = "000013-20261107T143000Z"
+INICIO_DO_PROCESS = datetime(2026, 11, 8, 9, 0, 0, tzinfo=timezone.utc)
+FIM_DO_PROCESS = datetime(2026, 11, 8, 9, 0, 5, tzinfo=timezone.utc)
+
+
+def cancela_um_upload(data_dir, registro, tmp_path, *, quantos=2):
+    """Roda `executar_upload` cancelado e devolve o diretório da sessão."""
+    from auto_counter.cameras.registry import carregar_registro
+    from auto_counter.pipeline.upload import executar_upload
+    from tests.test_cli_session_upload import escreve_video
+    from tests.test_pipeline_upload import ParadaNaConsulta, T0
+
+    camera = carregar_registro(registro).cameras[0]
+    arquivos = [
+        escreve_video(tmp_path / f"v{i}.mp4", cor=10 * (i + 1)) for i in range(quantos)
+    ]
+    estado = executar_upload(
+        camera,
+        arquivos,
+        [f"original-{i + 1}.mp4" for i in range(quantos)],
+        data_dir=data_dir,
+        agora=lambda: T0,
+        criar_detector=lambda caminho, config: None,
+        criar_parada=lambda: ParadaNaConsulta(1),
+        pid=1,
+    )
+    assert estado.fase.value == "PROCESSAMENTO_CANCELADO"
+    return data_dir / "sessions" / estado.id_sessao
+
+
+@pytest.fixture
+def upload_cancelado(data_dir, registro, modelo, tmp_path):
+    return cancela_um_upload(data_dir, registro, tmp_path)
+
+
+@pytest.fixture
+def relogio_do_process(monkeypatch):
+    # A primeira leitura é da trava de sessão única; depois vêm T0 e o fim.
+    instantes = iter(
+        [INICIO_DO_PROCESS, INICIO_DO_PROCESS, FIM_DO_PROCESS] + [FIM_DO_PROCESS] * 20
+    )
+    monkeypatch.setattr("auto_counter.cli._agora", lambda: next(instantes))
+
+
+def processa_upload(runner, registro, *extras):
+    return runner.invoke(
+        app,
+        [
+            "session",
+            "process",
+            ID_SESSAO_DO_UPLOAD,
+            "--config-dir",
+            str(registro),
+            *extras,
+        ],
+    )
+
+
+def test_AC_029_3_upload_cancelado_e_processado_desde_o_primeiro_video(
+    runner, registro, data_dir, modelo, detector, upload_cancelado, relogio_do_process
+):
+    assert not (upload_cancelado / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+
+    resultado = processa_upload(runner, registro)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert "Traceback" not in resultado.output
+    # 2 vídeos de 10 quadros a 10 fps: todos os 20 frames passam pelo detector.
+    assert detector.chamadas == 20
+    assert (upload_cancelado / NOME_DO_ARQUIVO_DE_EVENTOS).is_file()
+    assert "Minutos com dado:  1, 2" in resultado.output
+
+
+def test_AC_029_3_resultado_gravado_como_sessao_de_upload_concluida(
+    runner, registro, data_dir, modelo, detector, upload_cancelado, relogio_do_process
+):
+    from auto_counter.storage.model import OrigemDaSessao
+
+    resultado = processa_upload(runner, registro)
+
+    assert resultado.exit_code == 0, resultado.output
+    with conectar(data_dir) as conexao:
+        gravada = ler_sessao(conexao, ID_SESSAO_DO_UPLOAD)
+    assert gravada.origem is OrigemDaSessao.UPLOAD
+    assert gravada.status is StatusDaSessao.COMPLETA
+    assert gravada.duracao_pedida == gravada.duracao_real == 2
+    assert [v.nome_original for v in gravada.videos] == [
+        "original-1.mp4",
+        "original-2.mp4",
+    ]
+    assert [(v.minuto_inicial, v.minuto_final) for v in gravada.videos] == [
+        (1, 1),
+        (2, 2),
+    ]
+    # T0 e fim são os desta execução, e não os do upload cancelado.
+    assert gravada.inicio == INICIO_DO_PROCESS
+    assert gravada.fim == FIM_DO_PROCESS
+    # Como `session process` da ao vivo, não gera a planilha.
+    assert not list(data_dir.glob("*.xlsx"))
+
+
+def test_AC_030_6_process_do_upload_apaga_os_videos_depois_de_gravar(
+    runner, registro, data_dir, modelo, detector, upload_cancelado, relogio_do_process
+):
+    assert len(list(upload_cancelado.glob("video-*"))) == 2
+
+    resultado = processa_upload(runner, registro)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert list(upload_cancelado.glob("video-*")) == []
+    assert (upload_cancelado / "upload.json").is_file()
+    assert (upload_cancelado / NOME_DO_ARQUIVO_DE_EVENTOS).is_file()
+    with conectar(data_dir) as conexao:
+        assert ler_sessao(conexao, ID_SESSAO_DO_UPLOAD) is not None
+    assert "apagado" in resultado.output
+
+
+@pytest.mark.parametrize("opcao", [("--threshold", "0.5"), ("--sample-rate", "2")])
+def test_D_14_upload_recusa_threshold_e_sample_rate(
+    runner, registro, data_dir, modelo, detector, upload_cancelado, opcao
+):
+    resultado = processa_upload(runner, registro, *opcao)
+
+    assert resultado.exit_code == 1
+    assert opcao[0] in resultado.output
+    assert "Traceback" not in resultado.output
+    assert detector.chamadas == 0
+    assert len(list(upload_cancelado.glob("video-*"))) == 2
+    assert not (data_dir / "auto_counter.db").exists()
+
+
+def test_D_14_upload_sem_videos_em_disco_e_recusado_sem_tocar_no_banco(
+    runner, registro, data_dir, modelo, detector, upload_cancelado
+):
+    from auto_counter.storage.connection import NOME_DO_ARQUIVO_DO_BANCO
+
+    for video in upload_cancelado.glob("video-*"):
+        video.unlink()
+
+    resultado = processa_upload(runner, registro)
+
+    assert resultado.exit_code == 1
+    assert "já foram apagados" in resultado.output
+    assert "Traceback" not in resultado.output
+    assert detector.chamadas == 0
+    assert not (data_dir / NOME_DO_ARQUIVO_DO_BANCO).exists()
+
+
+def test_AC_028_2_process_do_upload_pega_a_trava(
+    runner, registro, data_dir, modelo, detector, upload_cancelado
+):
+    from tests.test_cli_lock import sessao_em_curso
+
+    with sessao_em_curso(data_dir):
+        resultado = processa_upload(runner, registro)
+
+    assert resultado.exit_code == 1
+    assert "Outro local" in resultado.output
+    assert detector.chamadas == 0
+    assert len(list(upload_cancelado.glob("video-*"))) == 2
+    assert not (upload_cancelado / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+
+
+def test_AC_012_7_session_process_recusa_sessao_cancelada_na_captura(
+    runner, registro, data_dir, modelo, detector
+):
+    """A sessão marcada como cancelada não tem o que processar, e nada é gravado."""
+    from auto_counter.storage.sessions import abrir_sessao, marcar_sessao_cancelada
+
+    dir_sessao = monta_sessao(data_dir)
+    with conectar(data_dir) as conexao:
+        abrir_sessao(
+            conexao,
+            id_sessao=ID_SESSAO,
+            id_camera=ID_CAMERA,
+            criada_em=PRIMEIRO_LAST_MODIFIED,
+            duracao_pedida=2,
+            sentido_a="Icaraí",
+            sentido_b="Centro",
+        )
+        marcar_sessao_cancelada(conexao, ID_SESSAO)
+
+    resultado = processa(runner, registro)
+
+    assert resultado.exit_code == 1
+    assert "cancelada pelo usuário" in resultado.output
+    assert ID_SESSAO in resultado.output
+    assert detector.chamadas == 0
+    assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+    with conectar(data_dir) as conexao:
+        assert contar_eventos(conexao, ID_SESSAO) == 0
+        assert ler_agregados(conexao, ID_SESSAO) == ()
+    assert list(data_dir.glob("*.xlsx")) == []

@@ -9,8 +9,9 @@ fica indisponível e a mensagem diz qual).
 Também acompanha a sessão: AC-012.1 e AC-012.2 (minutos capturados do total,
 perdidos e a fase), AC-012.3 (status e download da planilha), AC-012.4 (fechar e
 reabrir a aba reencontra a sessão, e só o botão de encerrar, com confirmação,
-pede o fim antecipado), AC-012.5 (processamento cancelado, sem download) e
-AC-012.6 (sem planilha, com o status).
+pede o fim antecipado), AC-012.5 (processamento cancelado, sem download),
+AC-012.6 (sem planilha, com o status) e AC-012.7 (sessão cancelada na captura,
+sem planilha nem clipes).
 
 E, por `acompanhamento-ao-vivo`, as quantidades por categoria e o tempo da
 sessão: AC-016.1 e AC-016.5 (quantidades no processamento, aviso na captura),
@@ -47,6 +48,38 @@ só com os clipes presentes em disco e o aviso dos ausentes (AC-025.5), nada dis
 quando a sessão foi cancelada, ficou sem planilha ou falhou (AC-025.6), e a
 mensagem de AC-024.3 quando os clipes não foram mantidos. Nome, tamanho, presença
 e `.zip` vêm do `pipeline` (SUP-038).
+
+E, por `upload-videos`, o painel de Configuração tem a escolha da fonte, "Câmera
+ao vivo" (padrão) ou "Fazer upload de vídeos" (AC-026.1). Com o upload, a
+duração, os atalhos e a opção de manter clipes não aparecem (AC-026.2, AC-024.5)
+e voltam com o valor de antes (R-4); os cartões continuam, aparecem o aviso da
+câmera e a área de envio, e "Iniciar sessão" não é desenhado. Na fonte ao vivo
+nada muda, e a lista de envio nunca entra na sessão (AC-026.4). Com sessão em
+andamento ou resultado na tela, a fonte e a área de envio ficam travadas
+(AC-026.5).
+
+E o envio: os arquivos que chegam são triados e gravados por `pipeline/envio.py`, lidos em
+segundo plano por `pipeline/leitura_video.py` e entram na lista na ordem recebida
+(AC-027.1, AC-027.2, AC-027.10). A lista, a validade de cada vídeo, a duplicata e os
+totais vêm de `pipeline/lista_envio.py` (AC-027.3 a AC-027.8) e ficam em
+`st.session_state`, então sobrevivem à troca de fonte (AC-026.3). "Remover" tira o
+item da lista sem apagar o arquivo (AC-027.8) e fica indisponível com a tela travada.
+
+No lugar de "Iniciar sessão", o upload tem o botão "Processar N vídeos" (AC-027.9), com o
+texto e a disponibilidade de `avaliar_envio`, e a mensagem do limite de 15 min logo acima
+dele (AC-027.11).
+
+E, por `processamento-upload`: o clique em "Processar N vídeos" dispara `session upload`
+em segundo plano com a câmera selecionada e só os vídeos válidos, na ordem da lista, e
+espera a sessão assumir a trava (AC-028.1). Disparo confirmado consome a lista da aba,
+porque os vídeos entraram na sessão (nota de AC-023.6 de `upload-videos`); recusado ou
+não confirmado, a lista fica e o motivo aparece na tela, sem traceback.
+
+Com a sessão de upload em andamento ou com o resultado dela na tela, o painel ao vivo tem o
+título "Contagem · vídeo k/N" e a fonte fica travada em "Fazer upload de vídeos" em qualquer
+aba (AC-028.3, AC-028.10). No painel de Configuração, no lugar da lista da aba, entra uma
+linha por vídeo com o estado gravado em disco (fila, processando, concluído, falhou ou
+interrompido), sem "Remover" nem totais (R-1 do `_tasks.md`, AC-029.2).
 """
 
 import argparse
@@ -54,11 +87,12 @@ import sys
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
+from uuid import uuid4
 
 import streamlit as st
 from dotenv import load_dotenv
 
-from auto_counter.pipeline import launch
+from auto_counter.pipeline import launch, leitura_video
 from auto_counter.pipeline.ambiente import data_dir_do_ambiente
 from auto_counter.pipeline.cameras import (
     DIRETORIO_PADRAO,
@@ -69,6 +103,15 @@ from auto_counter.pipeline.cameras import (
     previa_da_camera,
 )
 from auto_counter.pipeline.clipes import montar_zip
+from auto_counter.pipeline.envio import gravar_envio, triar
+from auto_counter.pipeline.lista_envio import (
+    AvaliacaoDoEnvio,
+    ItemDoEnvio,
+    LinhaDoEnvio,
+    Situacao as SituacaoDoEnvio,
+    aviso_da_camera,
+    avaliar_envio,
+)
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError
 from auto_counter.pipeline.progress import (
     TAXA_SEM_DADO,
@@ -79,10 +122,11 @@ from auto_counter.pipeline.progress import (
     Quantidades,
     Resultado,
     Situacao,
+    VideoNaTela,
     formatar_tempo,
     ler_progresso,
 )
-from auto_counter.pipeline.state import Fase
+from auto_counter.pipeline.state import MENSAGEM_SESSAO_CANCELADA, Fase
 
 MIME_DO_XLSX = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -103,6 +147,18 @@ CHAVE_CAMERA = "camera"
 CHAVE_RESULTADO_DISPENSADO = "resultado_dispensado"
 # A `chave` do resultado que "Nova sessão" dispensou nesta aba (D-9, SUP-074).
 CHAVE_MANTER_CLIPES = "manter_clipes"
+CHAVE_FONTE = "fonte"
+FONTE_CAMERA = "camera"
+FONTE_UPLOAD = "upload"
+ROTULO_DA_FONTE = {FONTE_CAMERA: "Câmera ao vivo", FONTE_UPLOAD: "Fazer upload de vídeos"}
+SUBTITULO_DA_FONTE = {
+    FONTE_CAMERA: "Acessa o feed e processa em tempo real",
+    FONTE_UPLOAD: "Processa arquivos enviados manualmente",
+}
+CHAVE_ENVIO_GERACAO = "envio_geracao"
+CHAVE_ENVIO_ITENS = "envio_itens"
+CHAVE_ENVIO_RECUSAS = "envio_recusas"
+LEITURA_EM_SEGUNDOS = 1
 # A opção "Manter clipes de vídeo" (AC-024.1, D-8 de `download-clipes`).
 CHAVE_CLIPES_BAIXADOS = "clipes_baixados"
 # Conjunto de `f"{chave}:{minuto}"` dos clipes cujo botão foi acionado (D-7).
@@ -165,6 +221,36 @@ CSS_DOS_COMPONENTES = """
 }
 .rotulo--acento { color: var(--accent); letter-spacing: 0; text-transform: none; }
 .linha-rotulo { display: flex; justify-content: space-between; align-items: baseline; }
+
+/* seletor de fonte: dois blocos lado a lado, o marcado em destaque */
+.st-key-fonte, .st-key-fonte [data-testid="stRadio"] { width: 100%; }
+.st-key-fonte [data-testid="stWidgetLabel"] { display: none; }
+.st-key-fonte [data-testid="stRadioGroup"] {
+  display: flex; flex-direction: row; align-items: stretch; gap: 0; width: 100%;
+  border: 1px solid var(--line);
+}
+.st-key-fonte [data-testid="stRadioGroup"] > div {
+  flex: 1 1 0; display: flex; align-items: stretch; margin: 0;
+}
+.st-key-fonte [data-testid="stRadioOption"] {
+  flex: 1; margin: 0; padding: 12px 14px; width: 100%; align-items: flex-start;
+  background: var(--panel); cursor: pointer;
+}
+.st-key-fonte [data-testid="stRadioOption"] > div { align-items: flex-start; }
+.st-key-fonte [data-testid="stRadioOption"] > div > div:first-child { display: none; }
+.st-key-fonte [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p {
+  margin: 0; font-size: 13px; line-height: 1.35; color: var(--muted);
+}
+.st-key-fonte [data-testid="stRadioOption"] [data-testid="stMarkdownContainer"] p:first-child {
+  font-size: 15px; color: var(--ink);
+}
+.st-key-fonte [data-testid="stRadioOption"] strong {
+  font-family: 'JetBrains Mono', monospace; font-weight: 700; color: var(--ink);
+}
+.st-key-fonte [data-testid="stRadioOption"]:has(input:checked) { background: var(--accent); }
+.st-key-fonte [data-testid="stRadioOption"]:has(input:checked) p,
+.st-key-fonte [data-testid="stRadioOption"]:has(input:checked) strong { color: var(--accentInk); }
+.st-key-fonte [data-testid="stRadioOption"]:has(input:disabled) { opacity: .55; cursor: not-allowed; }
 
 /* header */
 .st-key-cabecalho {
@@ -235,14 +321,58 @@ CSS_DOS_COMPONENTES = """
   width: auto; font-size: 12px; min-height: 36px; padding: 0 12px;
 }
 .st-key-botao_tema button p::before { content: "◐  "; }
-.st-key-iniciar_sessao, .st-key-nova_sessao, .st-key-parar_antecipadamente,
-.st-key-confirmar_encerramento, .st-key-voltar { width: 100%; }
-.st-key-iniciar_sessao button, .st-key-nova_sessao button,
-.st-key-parar_antecipadamente button {
+.st-key-iniciar_sessao, .st-key-processar_videos, .st-key-nova_sessao,
+.st-key-parar_antecipadamente, .st-key-confirmar_encerramento, .st-key-voltar {
+  width: 100%;
+}
+.st-key-iniciar_sessao button, .st-key-processar_videos button,
+.st-key-nova_sessao button, .st-key-parar_antecipadamente button {
   width: 100%; min-height: 56px; font-size: 15px; font-weight: 700;
   letter-spacing: .08em; text-transform: uppercase;
 }
-.st-key-iniciar_sessao button:disabled { opacity: .4; }
+.st-key-iniciar_sessao button:disabled,
+.st-key-processar_videos button:disabled { opacity: .4; }
+
+/* área de envio: rótulo, caixa tracejada e os textos do protótipo */
+[class*="st-key-envio_"] [data-testid="stWidgetLabel"] {
+  display: flex !important; visibility: visible !important;
+  min-height: 0; height: auto; margin-bottom: 10px;
+}
+[class*="st-key-envio_"] [data-testid="stWidgetLabel"] p {
+  font-family: 'JetBrains Mono', monospace; font-size: 12px;
+  letter-spacing: .1em; text-transform: uppercase; color: var(--muted);
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"] {
+  position: relative; display: flex; align-items: center; justify-content: center;
+  min-height: 112px; padding: 24px 16px; border: 1px dashed var(--line);
+  border-radius: 0; background: var(--panel2); cursor: pointer;
+}
+/* o botão nativo some, mas cobre a caixa inteira: o clique abre o seletor */
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"] > span {
+  position: absolute; inset: 0; margin: 0; opacity: 0; z-index: 1;
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"] > span button {
+  width: 100%; height: 100%; cursor: pointer;
+}
+[data-testid="stFileUploaderDropzoneInstructions"] {
+  display: flex; flex-direction: column; align-items: center; gap: 6px;
+  margin: 0; text-align: center;
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzoneInstructions"] > div {
+  display: none;
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzoneInstructions"]::before {
+  content: "Arraste vídeos aqui";
+  font-family: 'JetBrains Mono', monospace; font-size: 15px; font-weight: 700;
+  color: var(--ink);
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzoneInstructions"]::after {
+  content: "ou clique para selecionar · MP4, MOV, AVI, MKV";
+  font-size: 13px; color: var(--muted);
+}
+[class*="st-key-envio_"] [data-testid="stFileUploaderDropzone"][aria-disabled="true"] {
+  opacity: .55; cursor: not-allowed;
+}
 .st-key-confirmar_encerramento button, .st-key-voltar button {
   width: 100%; min-height: 44px;
 }
@@ -513,17 +643,19 @@ MENSAGEM_DO_TERMINAL = (
     "Sessão iniciada pelo terminal: a interface não acompanha o progresso dela."
 )
 MENSAGEM_SEM_CONTAGEM = "Sem contagem a exibir para esta sessão."
+MENSAGEM_PROCESSAMENTO_CANCELADO = "Processamento cancelado. Inicie uma nova sessão."
+# AC-012.5: os vídeos ficam em disco, mas o reprocessamento é do terminal
+# (`session process`, citado só na saída do `session run`).
 # AC-018.3 e AC-018.4: sessão cancelada, sem planilha, que falhou ou de processo
 # morto não mostra quantidade nenhuma, nem zero.
 
 AVISO_DE_ENCERRAR = {
     Fase.CAPTURA: (
-        "Encerrar agora? Os minutos já capturados serão processados, e a sessão "
-        "terá a duração que realmente aconteceu."
+        "Encerrar agora? A sessão será cancelada, os minutos já capturados "
+        "serão descartados e nenhuma contagem será feita."
     ),
     Fase.PROCESSAMENTO: (
-        "Encerrar agora? A contagem será cancelada, nada será gravado e os "
-        "vídeos serão mantidos para reprocessar depois."
+        "Encerrar agora? A contagem será cancelada e a sessão será finalizada."
     ),
 }
 
@@ -720,10 +852,9 @@ def _corpo_ao_vivo(
 
 def _andamento(andamento: Andamento) -> None:
     """A sessão em curso (D-16): título, fase, progresso, categorias e tempos."""
-    _cabecalho_ao_vivo(
-        f"Contagem ao vivo · {andamento.nome_camera or andamento.id_camera}",
-        andamento.taxa,
-    )
+    # `titulo` vem do pipeline: "Contagem ao vivo · <câmera>" ou, no upload,
+    # "Contagem · vídeo k/N" (AC-028.3).
+    _cabecalho_ao_vivo(andamento.titulo, andamento.taxa)
     if andamento.fase is Fase.CAPTURA:
         st.markdown(
             f"**Capturando** — {andamento.capturados} de {andamento.pedidos} "
@@ -812,8 +943,22 @@ def _painel_ao_vivo(progresso: Progresso, tela: EstadoDaTela) -> None:
 
 
 def _parar_antecipadamente(andamento: Andamento, data_dir: Path) -> None:
-    """O botão de encerrar, com confirmação, no lugar de "Iniciar sessão"."""
+    """O botão de encerrar, com confirmação, no lugar de "Iniciar sessão".
+
+    Depois da confirmação, o botão fica bloqueado com "Encerrando…" até o
+    resultado aparecer, inclusive ao reabrir a interface: o pedido é lido do
+    disco, e não da aba. Depois que o último minuto foi contado, não há mais o
+    que cancelar e o botão fica indisponível (AC-023.1).
+    """
+    if andamento.parada_pedida:
+        st.session_state[CHAVE_CONFIRMANDO] = False
+        st.button("Encerrando…", key="encerrando", disabled=True)
+        return
     if not andamento.pode_encerrar:
+        st.session_state[CHAVE_CONFIRMANDO] = False
+        st.button(
+            "Parar antecipadamente", key="parar_antecipadamente", disabled=True
+        )
         return
     if not st.session_state.get(CHAVE_CONFIRMANDO, False):
         st.button(
@@ -958,7 +1103,12 @@ def _resultado(resultado: Resultado) -> None:
         )
         _tempo_total(resultado)
     elif resultado.fase is Fase.PROCESSAMENTO_CANCELADO:
-        st.info(f"Processamento cancelado. {resultado.mensagem}")
+        st.info(MENSAGEM_PROCESSAMENTO_CANCELADO)
+        _tempo_total(resultado)
+    elif resultado.fase is Fase.SESSAO_CANCELADA:
+        # AC-012.7: pedida pelo usuário na captura. Sem quantidades, planilha,
+        # clipes nem reprocessamento: os clipes foram apagados.
+        st.info(f"{MENSAGEM_SESSAO_CANCELADA}.")
         _tempo_total(resultado)
     else:
         st.error(resultado.mensagem or "A sessão falhou.")
@@ -1011,39 +1161,13 @@ def _cartao(camera, config_dir: Path, id_selecionada: str, travada: bool) -> Non
         )
 
 
-def _configuracao(
-    config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
-) -> None:
-    """Painel de Configuração: câmera, duração e o botão principal (D-18)."""
-    disponiveis = cameras_disponiveis(config_dir)
-    travada = tela.configuracao_travada
-    st.markdown('<span class="rotulo">Configuração</span>', unsafe_allow_html=True)
-    st.markdown('<span class="rotulo">Câmera</span>', unsafe_allow_html=True)
+def _rotulo_da_fonte(fonte: str) -> str:
+    """Título em negrito e subtítulo abaixo, como no protótipo."""
+    return f"**{ROTULO_DA_FONTE[fonte]}**\n\n{SUBTITULO_DA_FONTE[fonte]}"
 
-    if tela.sessao_em_andamento:
-        st.info(progresso.mensagem_de_recusa)
 
-    id_escolhida = None
-    if disponiveis.cameras:
-        ids = [camera.id for camera in disponiveis.cameras]
-        # Sem escolha, ou com um id que sumiu do registro, vale a primeira (D-13).
-        if st.session_state.get(CHAVE_CAMERA) not in ids:
-            st.session_state[CHAVE_CAMERA] = ids[0]
-        id_escolhida = st.session_state[CHAVE_CAMERA]
-        # Cartões e duração travados continuam desenhados (D-11): o Streamlit
-        # descarta o estado de widget que não é desenhado, e é ele que devolve a
-        # duração anterior depois de "Nova sessão" (AC-023.6).
-        # Três cartões por linha, na ordem do registro (SUP-065).
-        cameras = disponiveis.cameras
-        for inicio in range(0, len(cameras), 3):
-            for coluna, camera in zip(st.columns(3), cameras[inicio : inicio + 3]):
-                with coluna:
-                    _cartao(camera, config_dir, id_escolhida, travada)
-    else:
-        st.warning("Nenhuma câmera disponível.")
-        if disponiveis.motivo:
-            st.caption(disponiveis.motivo)
-
+def _duracao_e_saida(travada: bool) -> None:
+    """Duração, atalhos e a opção de manter clipes: só na fonte ao vivo."""
     st.markdown(
         '<div class="linha-rotulo"><span class="rotulo">Duração</span>'
         f'<span class="rotulo rotulo--acento">máximo {DURACAO_MAXIMA} min</span></div>',
@@ -1074,7 +1198,7 @@ def _configuracao(
             args=(atalho,),
         )
 
-    st.markdown('<span class="rotulo">Saída</span>', unsafe_allow_html=True)
+    st.markdown('<span class="rotulo">02 · Saída</span>', unsafe_allow_html=True)
     st.session_state.setdefault(CHAVE_MANTER_CLIPES, False)
     with st.container(key="manter_clipes_cartao"):
         texto, controle = st.columns([5, 1], vertical_alignment="center")
@@ -1092,6 +1216,288 @@ def _configuracao(
                 label_visibility="collapsed",
             )
 
+
+def _camera_por_id(cameras, id_camera: str | None):
+    return next((c for c in cameras if c.id == id_camera), None)
+
+
+def _literal(texto: str) -> str:
+    """O texto sem que o markdown o interprete (nomes de arquivo têm `_` e `*`)."""
+    for caractere in ("\\", "`", "*", "_", "[", "]", "<", ">", "~", "|"):
+        texto = texto.replace(caractere, "\\" + caractere)
+    return texto
+
+
+def _receber_envio(arquivos, data_dir: Path) -> None:
+    """Tria, grava e põe na lista os arquivos do lote, na ordem recebida (D-3).
+
+    O recusado vai para as mensagens do lote e não é gravado. Depois do lote, a
+    geração do `file_uploader` sobe e a página roda de novo: o componente volta
+    vazio, o que libera a memória dele (R-2) e impede que um arquivo removido
+    volte no próximo `run` (D-10).
+    """
+    itens = list(st.session_state[CHAVE_ENVIO_ITENS])
+    recusas = []
+    for arquivo in arquivos:
+        recusa = triar(arquivo.name, arquivo.size)
+        if recusa is not None:
+            recusas.append(recusa)
+            continue
+        caminho = gravar_envio(data_dir, arquivo.name, arquivo)
+        itens.append(
+            ItemDoEnvio(
+                id=uuid4().hex,
+                nome=arquivo.name,
+                tamanho=arquivo.size,
+                caminho=caminho,
+                leitura=leitura_video.iniciar_leitura(caminho),
+            )
+        )
+    st.session_state[CHAVE_ENVIO_ITENS] = itens
+    st.session_state[CHAVE_ENVIO_RECUSAS] = recusas
+    st.session_state[CHAVE_ENVIO_GERACAO] += 1
+    st.rerun()
+
+
+def _remover_envio(id_do_item: str) -> None:
+    """Tira o item da lista sem apagar o arquivo do disco (D-4)."""
+    st.session_state[CHAVE_ENVIO_ITENS] = [
+        item
+        for item in st.session_state[CHAVE_ENVIO_ITENS]
+        if item.id != id_do_item
+    ]
+
+
+def _linha_de_envio(linha: LinhaDoEnvio, travada: bool) -> None:
+    with st.container(key=f"linha_envio_{linha.id}"):
+        nome, duracao, tamanho, remover = st.columns(
+            [5, 1.2, 1.4, 1.4], vertical_alignment="center"
+        )
+        nome.markdown(f"**{_literal(linha.nome)}**")
+        duracao.caption(
+            "lendo…" if linha.situacao is SituacaoDoEnvio.LENDO else linha.duracao or "—"
+        )
+        tamanho.caption(linha.tamanho)
+        remover.button(
+            "Remover",
+            key=f"remover_{linha.id}",
+            disabled=travada,
+            on_click=_remover_envio,
+            args=(linha.id,),
+        )
+        if linha.motivo:
+            st.error(linha.motivo)
+        if linha.aviso:
+            st.warning(linha.aviso)
+
+
+def _avaliar_lista(camera, tela: EstadoDaTela) -> AvaliacaoDoEnvio:
+    return avaliar_envio(
+        st.session_state[CHAVE_ENVIO_ITENS],
+        camera,
+        outra_sessao_em_andamento=tela.sessao_em_andamento,
+    )
+
+
+def _corpo_da_lista(camera, tela: EstadoDaTela, lendo_ao_desenhar: bool) -> None:
+    """A lista e os totais. Dentro do fragmento, avisa a página quando termina."""
+    avaliacao = _avaliar_lista(camera, tela)
+    if lendo_ao_desenhar and not any(
+        linha.situacao is SituacaoDoEnvio.LENDO for linha in avaliacao.linhas
+    ):
+        st.rerun()  # o botão e os totais da página acompanham o fim da leitura
+    for linha in avaliacao.linhas:
+        _linha_de_envio(linha, tela.configuracao_travada)
+    if avaliacao.totais is not None:
+        st.caption(avaliacao.totais)
+        st.caption(avaliacao.duracao_total)
+
+
+def _linha_do_video_da_sessao(posicao: int, video: VideoNaTela) -> None:
+    """Um vídeo da sessão de upload: nome e estado, sem "Remover" (AC-028.3)."""
+    with st.container(key=f"video_da_sessao_{posicao}"):
+        nome, estado = st.columns([6, 2.6], vertical_alignment="center")
+        nome.markdown(f"**{_literal(video.nome)}**")
+        estado.caption(video.estado)
+
+
+def _videos_da_sessao_de_upload(
+    progresso: Progresso, tela: EstadoDaTela
+) -> tuple[VideoNaTela, ...] | None:
+    """Os vídeos da sessão de upload em andamento ou com o resultado na tela.
+
+    Vêm do estado gravado em disco (R-1, D-16), e não da lista da aba, para a
+    lista ser a mesma depois de fechar e reabrir a aba (AC-028.10). Fora desses
+    dois momentos, `None`: vale a lista da aba.
+    """
+    if (
+        progresso.situacao is Situacao.EM_ANDAMENTO
+        and progresso.andamento.origem == "UPLOAD"
+    ):
+        return progresso.andamento.videos
+    if tela.resultado_na_tela and progresso.resultado.origem == "UPLOAD":
+        return progresso.resultado.videos
+    return None
+
+
+def _area_de_envio(
+    camera,
+    data_dir: Path,
+    tela: EstadoDaTela,
+    videos_da_sessao: tuple[VideoNaTela, ...] | None = None,
+) -> AvaliacaoDoEnvio | None:
+    """Aviso da câmera, área de envio, recusas, lista e totais (AC-026.2, D-12).
+
+    Com `videos_da_sessao` (sessão de upload em andamento ou com resultado na
+    tela), a área de envio continua desenhada e travada (AC-026.5), mas no lugar
+    da lista da aba entra uma linha por vídeo da sessão, sem "Remover" nem
+    totais (R-1), e não há avaliação a devolver.
+
+    O `file_uploader` não leva `type=`, para a recusa por extensão ser a mensagem
+    do app (D-3). A lista fica em `st.session_state`, fora do estado do widget,
+    para sobreviver à troca de fonte (AC-026.3, D-10). Triagem, validade,
+    duplicata e totais vêm do `pipeline` (SUP-038).
+    """
+    st.session_state.setdefault(CHAVE_ENVIO_ITENS, [])
+    st.session_state.setdefault(CHAVE_ENVIO_RECUSAS, [])
+    st.session_state.setdefault(CHAVE_ENVIO_GERACAO, 0)
+    if camera is not None:
+        st.info(aviso_da_camera(camera))
+    enviados = st.file_uploader(
+        "Vídeos",
+        accept_multiple_files=True,
+        key=f"envio_{st.session_state[CHAVE_ENVIO_GERACAO]}",
+        disabled=tela.configuracao_travada,
+        label_visibility="collapsed",
+    )
+    if enviados and not tela.configuracao_travada:
+        _receber_envio(enviados, data_dir)
+    if videos_da_sessao is not None:
+        for posicao, video in enumerate(videos_da_sessao, start=1):
+            _linha_do_video_da_sessao(posicao, video)
+        return None
+    for recusa in st.session_state[CHAVE_ENVIO_RECUSAS]:
+        st.warning(recusa)
+
+    avaliacao = _avaliar_lista(camera, tela)
+    lendo = any(
+        linha.situacao is SituacaoDoEnvio.LENDO for linha in avaliacao.linhas
+    )
+    if lendo:
+        # Com leitura pendente, a lista é um fragmento que se atualiza sozinho
+        # (D-6): sem isso "Lendo vídeos…" nunca seria visível.
+        st.fragment(run_every=LEITURA_EM_SEGUNDOS)(_corpo_da_lista)(camera, tela, True)
+    else:
+        _corpo_da_lista(camera, tela, False)
+    return avaliacao
+
+
+def _processar_videos(
+    camera, avaliacao: AvaliacaoDoEnvio, data_dir: Path, config_dir: Path
+) -> None:
+    """Dispara `session upload` com os vídeos válidos, na ordem da lista (AC-028.1).
+
+    Quais vídeos entram é da avaliação do `pipeline` (SUP-038): a tela só os
+    reencontra na lista da aba pelo `id`. Confirmado o início, a lista da aba é
+    consumida (nota de AC-023.6 de `upload-videos`); recusado ou não
+    confirmado, ela fica e o motivo aparece em `st.error`.
+    """
+    itens = {item.id: item for item in st.session_state[CHAVE_ENVIO_ITENS]}
+    validos = [
+        itens[linha.id]
+        for linha in avaliacao.linhas
+        if linha.situacao is SituacaoDoEnvio.VALIDO
+    ]
+    try:
+        disparada = launch.iniciar_upload(
+            camera.id,
+            [item.caminho for item in validos],
+            [item.nome for item in validos],
+            data_dir=data_dir,
+            config_dir=config_dir,
+        )
+    except OutraSessaoEmAndamentoError as falha:
+        st.error(str(falha))
+        return
+    except Exception as falha:  # noqa: BLE001 — a tela nunca mostra traceback
+        st.error(f"Não foi possível iniciar a sessão: {falha}")
+        return
+
+    problema = launch.aguardar_inicio(disparada, comando="upload")
+    if problema is None:
+        st.session_state[CHAVE_ENVIO_ITENS] = []
+        st.rerun()
+    else:
+        st.error(f"A sessão não iniciou: {problema}")
+
+
+def _configuracao(
+    config_dir: Path, data_dir: Path, progresso: Progresso, tela: EstadoDaTela
+) -> None:
+    """Painel de Configuração: câmera, duração e o botão principal (D-18)."""
+    disponiveis = cameras_disponiveis(config_dir)
+    travada = tela.configuracao_travada
+    st.markdown('<span class="rotulo">Configuração</span>', unsafe_allow_html=True)
+    st.markdown('<span class="rotulo">01 · Fonte</span>', unsafe_allow_html=True)
+    st.session_state.setdefault(CHAVE_FONTE, FONTE_CAMERA)
+    videos_da_sessao = _videos_da_sessao_de_upload(progresso, tela)
+    if videos_da_sessao is not None:
+        # Sessão de upload em andamento ou com resultado na tela: a fonte é a de
+        # upload em qualquer aba, antes de o `st.radio` (travado) ser desenhado
+        # (R-1, D-16).
+        st.session_state[CHAVE_FONTE] = FONTE_UPLOAD
+    st.radio(
+        "Fonte",
+        [FONTE_CAMERA, FONTE_UPLOAD],
+        format_func=_rotulo_da_fonte,
+        horizontal=True,
+        key=CHAVE_FONTE,
+        disabled=travada,
+        label_visibility="collapsed",
+    )
+    st.markdown('<span class="rotulo">Câmera</span>', unsafe_allow_html=True)
+
+    if tela.sessao_em_andamento:
+        st.info(progresso.mensagem_de_recusa)
+
+    id_escolhida = None
+    if disponiveis.cameras:
+        ids = [camera.id for camera in disponiveis.cameras]
+        # Sem escolha, ou com um id que sumiu do registro, vale a primeira (D-13).
+        if st.session_state.get(CHAVE_CAMERA) not in ids:
+            st.session_state[CHAVE_CAMERA] = ids[0]
+        id_escolhida = st.session_state[CHAVE_CAMERA]
+        # Cartões e duração travados continuam desenhados (D-11): o Streamlit
+        # descarta o estado de widget que não é desenhado, e é ele que devolve a
+        # duração anterior depois de "Nova sessão" (AC-023.6).
+        # Três cartões por linha, na ordem do registro (SUP-065).
+        cameras = disponiveis.cameras
+        for inicio in range(0, len(cameras), 3):
+            for coluna, camera in zip(st.columns(3), cameras[inicio : inicio + 3]):
+                with coluna:
+                    _cartao(camera, config_dir, id_escolhida, travada)
+    else:
+        st.warning("Nenhuma câmera disponível.")
+        if disponiveis.motivo:
+            st.caption(disponiveis.motivo)
+
+    avaliacao_do_envio = None
+    if st.session_state[CHAVE_FONTE] == FONTE_CAMERA:
+        _duracao_e_saida(travada)
+    else:
+        # Fonte de upload: duração, atalhos e "Manter clipes" não são
+        # desenhados (AC-026.2). Regravar as chaves impede o Streamlit de
+        # descartar o valor delas (R-4, D-11).
+        for chave in (CHAVE_DURACAO, CHAVE_MANTER_CLIPES):
+            if chave in st.session_state:
+                st.session_state[chave] = st.session_state[chave]
+        avaliacao_do_envio = _area_de_envio(
+            _camera_por_id(disponiveis.cameras, id_escolhida),
+            data_dir,
+            tela,
+            videos_da_sessao,
+        )
+
     if tela.resultado_na_tela:
         st.button(
             "Nova sessão",
@@ -1105,6 +1511,25 @@ def _configuracao(
     if progresso.situacao is Situacao.EM_ANDAMENTO:
         # Sessão da interface: o botão de iniciar não é desenhado (AC-023.1).
         _parar_antecipadamente(progresso.andamento, data_dir)
+        return
+
+    if avaliacao_do_envio is not None:
+        # Fonte de upload: o botão troca "Iniciar sessão" (D-9). Texto e
+        # disponibilidade vêm de `avaliar_envio`. O clique dispara
+        # `session upload` (AC-028.1); nenhum caminho de upload chama
+        # `launch.iniciar_sessao`.
+        if avaliacao_do_envio.aviso_do_limite:
+            st.error(avaliacao_do_envio.aviso_do_limite)
+        camera_do_upload = _camera_por_id(disponiveis.cameras, id_escolhida)
+        if st.button(
+            avaliacao_do_envio.texto_do_botao,
+            key="processar_videos",
+            type="primary",
+            disabled=not avaliacao_do_envio.botao_disponivel,
+        ) and camera_do_upload is not None:
+            _processar_videos(
+                camera_do_upload, avaliacao_do_envio, data_dir, config_dir
+            )
         return
 
     indisponivel = tela.sessao_em_andamento or id_escolhida is None

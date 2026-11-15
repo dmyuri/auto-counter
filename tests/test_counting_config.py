@@ -106,3 +106,27 @@ def test_janela_de_emenda_e_tolerancia_negativas_sao_recusadas():
     with pytest.raises(ValueError) as tolerancia:
         ConfiguracaoDoProcessamento(tolerancia_da_assinatura=-0.01)
     assert "tolerancia_da_assinatura" in str(tolerancia.value)
+
+
+def test_SUP_090_frames_por_segundo_padrao_e_10():
+    # SUP-090 (processamento-upload): 10 frames analisados por segundo de vídeo.
+    assert ConfiguracaoDoProcessamento().frames_por_segundo == 10
+
+
+def test_SUP_090_frames_por_segundo_menor_que_1_e_recusado():
+    with pytest.raises(ValueError) as zero:
+        ConfiguracaoDoProcessamento(frames_por_segundo=0)
+    assert "frames_por_segundo" in str(zero.value)
+    assert "0" in str(zero.value)
+    assert "SUP-090" in str(zero.value)
+
+    with pytest.raises(ValueError):
+        ConfiguracaoDoProcessamento(frames_por_segundo=-10)
+
+
+def test_SUP_017_amostragem_da_sessao_ao_vivo_continua_3():
+    # A amostragem por fps efetivo é do upload; a ao vivo segue 1 a cada 3.
+    configuracao = ConfiguracaoDoProcessamento()
+
+    assert configuracao.amostragem == 3
+    assert ConfiguracaoDoProcessamento(frames_por_segundo=5).amostragem == 3

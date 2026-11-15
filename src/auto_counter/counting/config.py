@@ -63,6 +63,7 @@ class ConfiguracaoDoProcessamento:
     tamanho_de_entrada: int = 640  # SUP-015
     janela_de_emenda_em_segundos: float = 2.0  # AC-007.1
     tolerancia_da_assinatura: float = 0.10  # SUP-019: fração do comprimento
+    frames_por_segundo: int = 10  # SUP-090 (processamento-upload)
 
     def __post_init__(self) -> None:
         """Recusa valor fora do domínio de cada campo.
@@ -82,6 +83,12 @@ class ConfiguracaoDoProcessamento:
             raise ValueError(
                 f"amostragem precisa ser um inteiro de pelo menos 1 frame, e "
                 f"não {self.amostragem} (SUP-017)"
+            )
+
+        if self.frames_por_segundo < 1:
+            raise ValueError(
+                f"frames_por_segundo precisa ser um inteiro de pelo menos 1, e "
+                f"não {self.frames_por_segundo} (SUP-090)"
             )
 
         if self.janela_de_emenda_em_segundos < 0:

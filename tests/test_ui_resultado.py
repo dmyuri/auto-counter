@@ -204,7 +204,14 @@ def test_AC_023_4_cancelada_sem_planilha_e_falhou_mostram_a_mensagem_sem_cartao(
     at = abre_a_interface()
 
     assert not at.exception
-    assert "desfecho de teste" in textos(at)
+    # O processamento cancelado tem texto próprio na interface; o `mensagem` do
+    # estado, com o comando de reprocessar, é só do terminal.
+    esperado = (
+        "Processamento cancelado. Inicie uma nova sessão."
+        if fase is Fase.PROCESSAMENTO_CANCELADO
+        else "desfecho de teste"
+    )
+    assert esperado in textos(at)
     assert downloads(at) == []
     assert "registros" not in textos(at)
 
@@ -233,5 +240,23 @@ def test_AC_023_4_planilha_que_sumiu_do_disco_mostra_a_mensagem_sem_cartao(data_
     at = abre_a_interface()
 
     assert any(str(planilha) in w.value for w in at.warning)
+    assert downloads(at) == []
+    assert "registros" not in textos(at)
+
+
+def test_AC_023_4_sessao_cancelada_na_captura_mostra_a_mensagem_sem_cartao(data_dir):
+    termina(
+        data_dir,
+        Fase.SESSAO_CANCELADA,
+        status="COMPLETA",
+        mensagem="Sessão cancelada pelo usuário",
+    )
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert "Sessão cancelada pelo usuário" in textos(at)
+    # O cancelamento foi pedido pelo usuário: é um aviso, e não uma falha.
+    assert at.error == []
     assert downloads(at) == []
     assert "registros" not in textos(at)

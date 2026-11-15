@@ -36,6 +36,10 @@ from typing import Any, Protocol
 import supervision as sv
 
 from auto_counter.cameras.model import Camera
+from auto_counter.counting.cancelamento import (
+    ParadaDoProcessamento,
+    ProcessamentoCancelado,
+)
 from auto_counter.counting.config import ConfiguracaoDoProcessamento
 from auto_counter.counting.crossing import AvaliadorDeCruzamento
 from auto_counter.counting.events import Evento
@@ -86,6 +90,7 @@ def processar_clipe(
     config: ConfiguracaoDoProcessamento,
     fabrica_de_bytetrack: Callable[[], RastreadorDoSupervision] = criar_bytetrack,
     ao_gerar_evento: Callable[[Evento, float], None] | None = None,
+    parada: ParadaDoProcessamento | None = None,
 ) -> ResultadoDoClipe:
     """Detecta, rastreia e conta os cruzamentos de **um** clipe.
 
@@ -103,6 +108,10 @@ def processar_clipe(
     (AC-016.2 de `acompanhamento-ao-vivo`). Não muda o resultado: se a leitura
     falhar no meio (D-4), o gancho já foi chamado e o resultado continua sem
     eventos — quem desconta o minuto é o chamador.
+
+    `parada`, se dada, é consultada antes de cada frame analisado (AC-012.5 de
+    `interface-sessao`, SUP-108). Pedida, levanta `ProcessamentoCancelado` sem
+    mandar mais nenhum frame ao detector, e o clipe não devolve resultado.
     """
     rastreador = rastreador_para_o_clipe(minuto, fabrica_de_bytetrack)
     amostragem = frames_amostrados(caminho, config.amostragem)
@@ -112,6 +121,11 @@ def processar_clipe(
     analisados = 0
 
     for amostra in amostragem:
+        if parada is not None and parada.foi_pedida():
+            raise ProcessamentoCancelado(
+                f"o processamento foi cancelado a pedido do usuário durante o "
+                f"minuto {minuto}"
+            )
         if avaliador is None:
             fps = amostragem.fps
             if fps is None or fps <= 0:

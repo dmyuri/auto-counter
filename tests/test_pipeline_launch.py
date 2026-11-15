@@ -215,6 +215,26 @@ def test_AC_012_4_encerrar_com_sessao_em_andamento_cria_o_pedido(tmp_path):
     assert (tmp_path / NOME_DO_PEDIDO).is_file()
 
 
+def test_AC_023_1_encerrar_depois_do_ultimo_clipe_contado_nao_cria_pedido(tmp_path):
+    a = AnotadorDoEstado(
+        tmp_path,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=1,
+        iniciada_em=INICIO,
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.processamento_iniciado("000013-20260907T110000Z", 1)
+    a.minuto_processado()
+
+    with trava_do_run(tmp_path):
+        assert encerrar_sessao(tmp_path) is False
+
+    assert not (tmp_path / NOME_DO_PEDIDO).exists()
+
+
 def test_aguardar_inicio_devolve_none_quando_a_sessao_assume_a_trava(tmp_path):
     disparada = dispara(tmp_path, PopenDuble())
 
@@ -266,3 +286,138 @@ def test_python_m_auto_counter_responde_ao_help():
 
     assert resultado.returncode == 0, resultado.stderr
     assert "session" in resultado.stdout
+
+
+# --- processamento-upload: disparo da sessão de upload (D-13, D-16) ---
+
+from auto_counter.pipeline.launch import iniciar_upload  # noqa: E402
+
+
+def dispara_upload(tmp_path, popen, arquivos=None, nomes=None):
+    arquivos = [tmp_path / "envios" / "u1.mp4", tmp_path / "envios" / "u2.mov"] if (
+        arquivos is None
+    ) else arquivos
+    nomes = ["primeiro.mp4", "segundo.MOV"] if nomes is None else nomes
+    return iniciar_upload(
+        "000013",
+        arquivos,
+        nomes,
+        data_dir=tmp_path,
+        config_dir=tmp_path / "cameras",
+        popen=popen,
+    )
+
+
+def trava_do_upload(data_dir, id_camera="000013"):
+    return adquirir_trava(
+        data_dir,
+        comando="upload",
+        id_camera=id_camera,
+        nome_camera="Praça Exemplo",
+        agora=lambda: INICIO,
+    )
+
+
+def test_AC_028_1_upload_dispara_session_upload_com_arquivos_e_nomes_na_ordem(
+    tmp_path,
+):
+    popen = PopenDuble()
+
+    dispara_upload(tmp_path, popen)
+
+    (comando, _), = popen.chamadas
+    assert comando[:4] == [sys.executable, "-m", "auto_counter", "session"]
+    assert comando[4:6] == ["upload", "000013"]
+    assert comando[6:8] == [
+        str(tmp_path / "envios" / "u1.mp4"),
+        str(tmp_path / "envios" / "u2.mov"),
+    ]
+    assert comando[8:] == [
+        "--nome",
+        "primeiro.mp4",
+        "--nome",
+        "segundo.MOV",
+        "--config-dir",
+        str(tmp_path / "cameras"),
+    ]
+
+
+def test_AC_012_4_upload_e_disparado_em_processo_destacado(tmp_path):
+    popen = PopenDuble()
+
+    disparada = dispara_upload(tmp_path, popen)
+
+    (_, opcoes), = popen.chamadas
+    if sys.platform == "win32":
+        assert opcoes["creationflags"] & subprocess.DETACHED_PROCESS
+        assert opcoes["creationflags"] & subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        assert opcoes["start_new_session"] is True
+    assert opcoes["stdin"] == subprocess.DEVNULL
+    assert opcoes["stderr"] == subprocess.STDOUT
+    assert opcoes["stdout"].name == str(disparada.log)
+    assert disparada.log.parent == tmp_path / "logs"
+    assert opcoes["env"][VARIAVEL_DATA_DIR] == str(tmp_path)
+    assert opcoes["env"]["PYTHONUTF8"] == "1"
+    assert disparada.id_camera == "000013"
+
+
+def test_AC_028_2_com_sessao_em_andamento_nenhum_upload_e_disparado(tmp_path):
+    popen = PopenDuble()
+
+    with trava_do_run(tmp_path):
+        with pytest.raises(OutraSessaoEmAndamentoError):
+            dispara_upload(tmp_path, popen)
+
+    assert popen.chamadas == []
+
+
+def test_upload_sem_arquivo_nada_e_disparado(tmp_path):
+    popen = PopenDuble()
+
+    with pytest.raises(ValueError):
+        dispara_upload(tmp_path, popen, arquivos=[], nomes=[])
+
+    assert popen.chamadas == []
+
+
+def test_upload_com_nomes_em_quantidade_diferente_nada_e_disparado(tmp_path):
+    popen = PopenDuble()
+
+    with pytest.raises(ValueError):
+        dispara_upload(tmp_path, popen, nomes=["so-um.mp4"])
+
+    assert popen.chamadas == []
+
+
+def test_upload_descarta_pedido_de_parada_antigo(tmp_path):
+    pedir_parada(tmp_path)
+
+    dispara_upload(tmp_path, PopenDuble())
+
+    assert not (tmp_path / NOME_DO_PEDIDO).exists()
+
+
+def test_aguardar_inicio_do_upload_reconhece_a_trava_de_upload(tmp_path):
+    disparada = dispara_upload(tmp_path, PopenDuble())
+
+    with trava_do_upload(tmp_path):
+        assert (
+            aguardar_inicio(disparada, comando="upload", dormir=lambda s: None) is None
+        )
+
+
+def test_aguardar_inicio_do_upload_nao_aceita_a_trava_de_run(tmp_path):
+    disparada = dispara_upload(tmp_path, PopenDuble())
+    relogio = iter([0.0, 1.0, 6.0, 7.0])
+
+    with trava_do_run(tmp_path):
+        mensagem = aguardar_inicio(
+            disparada,
+            comando="upload",
+            limite=5.0,
+            dormir=lambda s: None,
+            relogio=lambda: next(relogio),
+        )
+
+    assert "não confirmou" in mensagem
