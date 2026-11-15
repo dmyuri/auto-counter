@@ -78,11 +78,20 @@ class VideoNoEstado:
     situacao: SituacaoDoVideo
 
 
+MENSAGEM_SESSAO_CANCELADA = "Sessão cancelada pelo usuário"
+"""AC-012.7: o que a interface mostra quando o usuário para a captura. Vive aqui
+para `pipeline/run.py` gravar e `ui/app.py` importar, sem repetir o texto."""
+
+
 class Fase(Enum):
     """Onde a sessão está.
 
     A persistência e a exportação contam como fim do `PROCESSAMENTO`, porque
     AC-012.2 fala em duas fases só.
+
+    `SESSAO_CANCELADA` (AC-012.7) é o desfecho de quem parou na captura pela
+    interface: nada foi contado e os clipes foram apagados. É distinto de
+    `PROCESSAMENTO_CANCELADO`, que mantém os vídeos para reprocessar.
     """
 
     CAPTURA = "CAPTURA"
@@ -90,6 +99,7 @@ class Fase(Enum):
     CONCLUIDA = "CONCLUIDA"
     SEM_PLANILHA = "SEM_PLANILHA"
     PROCESSAMENTO_CANCELADO = "PROCESSAMENTO_CANCELADO"
+    SESSAO_CANCELADA = "SESSAO_CANCELADA"
     FALHOU = "FALHOU"
 
     @property

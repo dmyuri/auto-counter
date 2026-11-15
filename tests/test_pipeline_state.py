@@ -5,7 +5,8 @@ Critérios cobertos, de `.spec/features/interface-sessao/spec.md`:
 - AC-012.1 — minutos capturados e perdidos até ali;
 - AC-012.2 — a fase e o progresso dentro dela;
 - AC-012.4 — o progresso continua em disco, para ser reencontrado ao reabrir a
-  interface.
+  interface;
+- AC-012.7 — a sessão cancelada na captura é um desfecho terminal próprio.
 
 Nada aqui toca a rede nem grava fora de `tmp_path`.
 """
@@ -113,6 +114,23 @@ def test_fases_terminais_e_nao_terminais():
         Fase.FALHOU,
     ):
         assert fase.terminal
+
+
+def test_AC_012_7_sessao_cancelada_e_fase_terminal_distinta_do_processamento_cancelado(
+    tmp_path,
+):
+    assert Fase.SESSAO_CANCELADA.terminal
+    assert Fase.SESSAO_CANCELADA is not Fase.PROCESSAMENTO_CANCELADO
+
+    a = anotador(tmp_path)
+    a.iniciar()
+    a.terminar(Fase.SESSAO_CANCELADA, mensagem="Sessão cancelada pelo usuário")
+
+    estado = ler_estado(tmp_path)
+    assert estado.fase is Fase.SESSAO_CANCELADA
+    assert estado.terminada_em is not None
+    assert estado.planilha is None
+    assert estado.quantidades is None
 
 
 def test_terminar_com_fase_nao_terminal_e_erro_de_programacao(tmp_path):

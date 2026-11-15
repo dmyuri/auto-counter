@@ -28,7 +28,12 @@ from auto_counter.pipeline.progress import (
     formatar_tempo,
     ler_progresso,
 )
-from auto_counter.pipeline.state import AnotadorDoEstado, ClipeMantido, Fase
+from auto_counter.pipeline.state import (
+    MENSAGEM_SESSAO_CANCELADA,
+    AnotadorDoEstado,
+    ClipeMantido,
+    Fase,
+)
 from auto_counter.storage import schema
 from auto_counter.storage.connection import caminho_do_banco, conectar
 from tests.export_helpers import ID_SESSAO, evento, gravar_sessao
@@ -1516,3 +1521,68 @@ def test_titulo_da_sessao_ao_vivo_continua_contagem_ao_vivo_com_o_nome(tmp_path)
     assert andamento.titulo == "Contagem ao vivo · Praça Exemplo"
     assert andamento.origem == "CAMERA"
     assert andamento.videos == ()
+
+
+# --- interface-sessao: sessão cancelada pelo usuário na captura (AC-012.7) ---
+
+
+def sessao_cancelada_na_captura(data_dir, *, fim=None, manter_videos=False):
+    """A sessão que o usuário parou na captura: nenhum minuto vai à contagem."""
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=5,
+        iniciada_em=INICIO,
+        manter_videos=manter_videos,
+        **({} if fim is None else {"agora": lambda: fim}),
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, True)
+    a.terminar(
+        Fase.SESSAO_CANCELADA,
+        id_sessao=ID_SESSAO,
+        status="COMPLETA",
+        mensagem=MENSAGEM_SESSAO_CANCELADA,
+    )
+    return a
+
+
+def test_AC_012_7_a_mensagem_da_sessao_cancelada_e_a_da_spec():
+    assert MENSAGEM_SESSAO_CANCELADA == "Sessão cancelada pelo usuário"
+
+
+def test_AC_018_3_sessao_cancelada_na_captura_traz_tempo_e_nenhuma_quantidade(tmp_path):
+    fim = INICIO + timedelta(minutes=2, seconds=30)
+    sessao_cancelada_na_captura(tmp_path, fim=fim)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.SESSAO_CANCELADA
+    assert resultado.mensagem == MENSAGEM_SESSAO_CANCELADA
+    assert resultado.tempo_total == 150
+    assert resultado.quantidades is None
+    assert resultado.planilha is None
+
+
+def test_AC_018_3_sessao_cancelada_na_captura_nao_traz_participacoes_nem_taxa(tmp_path):
+    sessao_cancelada_na_captura(tmp_path)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.nome_camera == "Praça Exemplo"
+    assert resultado.participacoes is None
+    assert resultado.taxa == "— veíc/min"
+
+
+def test_AC_025_6_sessao_cancelada_na_captura_nao_traz_clipes(tmp_path):
+    """Mesmo com "Manter clipes" ligado: os clipes foram apagados (AC-012.7)."""
+    sessao_cancelada_na_captura(tmp_path, manter_videos=True)
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.clipes == ()
+    assert resultado.clipes_ausentes == 0
+    assert resultado.titulo_dos_clipes is None
