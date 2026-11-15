@@ -47,6 +47,7 @@ def _abrir_e_fechar(
     *,
     criada_em: datetime,
     status: StatusDaSessao = StatusDaSessao.COMPLETA,
+    encerrada_por_servidor_indisponivel: bool = False,
 ) -> None:
     abrir_sessao(
         conexao,
@@ -66,6 +67,7 @@ def _abrir_e_fechar(
         encerrada_pelo_usuario=False,
         status=status,
         minutos_perdidos=(),
+        encerrada_por_servidor_indisponivel=encerrada_por_servidor_indisponivel,
     )
 
 
@@ -248,3 +250,50 @@ def test_AC_009_2_session_list_mostra_a_marca_da_sessao_cancelada(runner, data_d
     }
     assert "COMPLETA · cancelada pelo usuário" in linhas["cancelada"]
     assert "cancelada pelo usuário" not in linhas["normal"]
+
+
+def test_AC_036_4_session_list_mostra_a_marca_de_servidor_indisponivel(
+    runner, data_dir
+):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(data_dir) as conexao:
+        _abrir_e_fechar(
+            conexao,
+            "sem-servidor",
+            criada_em=base,
+            status=StatusDaSessao.INVALIDA,
+            encerrada_por_servidor_indisponivel=True,
+        )
+
+    resultado = runner.invoke(app, ["session", "list"])
+
+    assert resultado.exit_code == 0, resultado.output
+    assert "INVALIDA · servidor indisponível" in resultado.output
+
+
+def test_AC_036_4_session_list_nao_mostra_a_marca_nas_outras_sessoes(
+    runner, data_dir
+):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(data_dir) as conexao:
+        _abrir_e_fechar(conexao, "normal", criada_em=base)
+        _abrir_e_fechar(
+            conexao,
+            "sem-servidor",
+            criada_em=base + timedelta(minutes=10),
+            status=StatusDaSessao.INVALIDA,
+            encerrada_por_servidor_indisponivel=True,
+        )
+        _abrir_e_fechar(
+            conexao, "cancelada", criada_em=base + timedelta(minutes=20)
+        )
+        marcar_sessao_cancelada(conexao, "cancelada")
+
+    resultado = runner.invoke(app, ["session", "list"])
+
+    linhas = {
+        linha.split()[0]: linha for linha in resultado.output.splitlines() if linha
+    }
+    assert "servidor indisponível" in linhas["sem-servidor"]
+    assert "servidor indisponível" not in linhas["normal"]
+    assert "servidor indisponível" not in linhas["cancelada"]

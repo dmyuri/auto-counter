@@ -1154,7 +1154,8 @@ def listar_sessoes_capturadas(
 
     A sessão cancelada pelo usuário na captura (AC-008.6) mostra a marca "·
     cancelada pelo usuário" depois do status, para não ser lida como sessão
-    válida sem tráfego (AC-009.2).
+    válida sem tráfego (AC-009.2). A sessão encerrada por servidor indisponível
+    mostra "· servidor indisponível" no mesmo ponto (AC-036.4).
     """
     data_dir = _data_dir()
     caminho = caminho_do_banco(data_dir)
@@ -1183,6 +1184,8 @@ def listar_sessoes_capturadas(
         status_texto = "—" if item.status is None else item.status.value
         if item.cancelada_pelo_usuario:
             status_texto += " · cancelada pelo usuário"
+        if item.encerrada_por_servidor_indisponivel:
+            status_texto += " · servidor indisponível"
         periodo = f"{item.inicio or '—'} .. {item.fim or '—'}"
         if item.origem is OrigemDaSessao.UPLOAD:
             periodo += " (horário do processamento)"
