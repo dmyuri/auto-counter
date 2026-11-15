@@ -225,11 +225,26 @@ def test_AC_023_1_sessao_da_interface_troca_iniciar_por_parar_antecipadamente(
     assert "Parar antecipadamente" in botoes(at)
 
 
+def test_AC_023_1_aviso_da_captura_diz_que_a_sessao_sera_cancelada(data_dir, relogio):
+    captura_em_curso(data_dir)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+        at = clica(at, "Parar antecipadamente")
+
+    aviso = textos(at)
+    assert "A sessão será cancelada" in aviso
+    assert "descartados" in aviso
+    assert "nenhuma contagem será feita" in aviso
+    # O aviso antigo, de quando os minutos capturados seguiam para a contagem.
+    assert "serão processados" not in aviso
+
+
 @pytest.mark.parametrize("fase", ["captura", "processamento"])
 def test_AC_023_1_so_a_confirmacao_pede_a_parada(data_dir, relogio, fase):
     if fase == "captura":
         captura_em_curso(data_dir)
-        aviso = "Os minutos já capturados serão processados"
+        aviso = "A sessão será cancelada"
     else:
         sessao_em_processamento(data_dir, a_processar=2)
         aviso = "A contagem será cancelada"

@@ -329,3 +329,17 @@ def test_downloads_usam_dado_adiado(data_dir, entregas):
     assert len(mp4) == 3
     assert all(callable(e["data"]) for e in mp4)
     assert callable(entrega_do_zip(entregas)["data"])
+
+
+def test_AC_025_6_sessao_cancelada_na_captura_nao_mostra_lista(data_dir, entregas):
+    """Mesmo com "Manter clipes" ligado: os clipes foram apagados (AC-012.7)."""
+    itens = tres_clipes(data_dir)
+    sessao(data_dir, fase=Fase.SESSAO_CANCELADA, clipes=itens)
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert entregas_de_clipe(entregas) == []
+    assert not [e for e in entregas if e.get("file_name", "").endswith(".zip")]
+    assert "Clipes ·" not in textos(at)
+    assert MENSAGEM_NAO_MANTIDOS not in [i.value for i in at.info]

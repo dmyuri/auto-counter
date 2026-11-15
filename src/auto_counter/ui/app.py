@@ -9,8 +9,9 @@ fica indisponível e a mensagem diz qual).
 Também acompanha a sessão: AC-012.1 e AC-012.2 (minutos capturados do total,
 perdidos e a fase), AC-012.3 (status e download da planilha), AC-012.4 (fechar e
 reabrir a aba reencontra a sessão, e só o botão de encerrar, com confirmação,
-pede o fim antecipado), AC-012.5 (processamento cancelado, sem download) e
-AC-012.6 (sem planilha, com o status).
+pede o fim antecipado), AC-012.5 (processamento cancelado, sem download),
+AC-012.6 (sem planilha, com o status) e AC-012.7 (sessão cancelada na captura,
+sem planilha nem clipes).
 
 E, por `acompanhamento-ao-vivo`, as quantidades por categoria e o tempo da
 sessão: AC-016.1 e AC-016.5 (quantidades no processamento, aviso na captura),
@@ -125,7 +126,7 @@ from auto_counter.pipeline.progress import (
     formatar_tempo,
     ler_progresso,
 )
-from auto_counter.pipeline.state import Fase
+from auto_counter.pipeline.state import MENSAGEM_SESSAO_CANCELADA, Fase
 
 MIME_DO_XLSX = (
     "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
@@ -647,8 +648,8 @@ MENSAGEM_SEM_CONTAGEM = "Sem contagem a exibir para esta sessão."
 
 AVISO_DE_ENCERRAR = {
     Fase.CAPTURA: (
-        "Encerrar agora? Os minutos já capturados serão processados, e a sessão "
-        "terá a duração que realmente aconteceu."
+        "Encerrar agora? A sessão será cancelada, os minutos já capturados "
+        "serão descartados e nenhuma contagem será feita."
     ),
     Fase.PROCESSAMENTO: (
         "Encerrar agora? A contagem será cancelada, nada será gravado e os "
@@ -1087,6 +1088,11 @@ def _resultado(resultado: Resultado) -> None:
         _tempo_total(resultado)
     elif resultado.fase is Fase.PROCESSAMENTO_CANCELADO:
         st.info(f"Processamento cancelado. {resultado.mensagem}")
+        _tempo_total(resultado)
+    elif resultado.fase is Fase.SESSAO_CANCELADA:
+        # AC-012.7: pedida pelo usuário na captura. Sem quantidades, planilha,
+        # clipes nem reprocessamento: os clipes foram apagados.
+        st.info(f"{MENSAGEM_SESSAO_CANCELADA}.")
         _tempo_total(resultado)
     else:
         st.error(resultado.mensagem or "A sessão falhou.")

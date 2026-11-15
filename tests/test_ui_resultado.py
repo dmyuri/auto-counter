@@ -235,3 +235,21 @@ def test_AC_023_4_planilha_que_sumiu_do_disco_mostra_a_mensagem_sem_cartao(data_
     assert any(str(planilha) in w.value for w in at.warning)
     assert downloads(at) == []
     assert "registros" not in textos(at)
+
+
+def test_AC_023_4_sessao_cancelada_na_captura_mostra_a_mensagem_sem_cartao(data_dir):
+    termina(
+        data_dir,
+        Fase.SESSAO_CANCELADA,
+        status="COMPLETA",
+        mensagem="Sessão cancelada pelo usuário",
+    )
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    assert "Sessão cancelada pelo usuário" in textos(at)
+    # O cancelamento foi pedido pelo usuário: é um aviso, e não uma falha.
+    assert at.error == []
+    assert downloads(at) == []
+    assert "registros" not in textos(at)
