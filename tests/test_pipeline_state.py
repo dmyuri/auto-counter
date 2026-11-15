@@ -701,3 +701,41 @@ def test_sessao_ao_vivo_continua_em_captura_sem_videos(tmp_path):
     assert estado.fase is Fase.CAPTURA
     assert estado.origem == "CAMERA"
     assert estado.videos == ()
+
+
+# --- servidor-indisponivel: estado da sessão (T-06, D-10) ---
+
+
+def test_AC_035_1_estado_grava_e_le_a_marca_e_o_instante_da_queda(tmp_path):
+    queda = INICIO + timedelta(seconds=132)
+    a = anotador(tmp_path)
+    a.iniciar()
+    assert a.estado.encerrada_por_servidor_indisponivel is False
+    assert a.estado.servidor_indisponivel_desde is None
+
+    a.captura_encerrada_por_servidor(queda)
+
+    estado = ler_estado(tmp_path)
+    assert estado.encerrada_por_servidor_indisponivel is True
+    assert estado.servidor_indisponivel_desde == queda
+    # A fase não muda: não existe fase nova (D-10).
+    assert estado.fase is Fase.CAPTURA
+
+    dados = json.loads((tmp_path / NOME_DO_ESTADO).read_text(encoding="utf-8"))
+    assert dados["servidor_indisponivel_desde"] == queda.isoformat()
+
+
+def test_AC_035_1_estado_anterior_sem_os_campos_e_lido_com_os_padroes(tmp_path):
+    a = anotador(tmp_path)
+    a.iniciar()
+    caminho = tmp_path / NOME_DO_ESTADO
+    dados = json.loads(caminho.read_text(encoding="utf-8"))
+    del dados["encerrada_por_servidor_indisponivel"]
+    del dados["servidor_indisponivel_desde"]
+    caminho.write_text(json.dumps(dados), encoding="utf-8")
+
+    estado = ler_estado(tmp_path)
+
+    assert estado is not None
+    assert estado.encerrada_por_servidor_indisponivel is False
+    assert estado.servidor_indisponivel_desde is None
