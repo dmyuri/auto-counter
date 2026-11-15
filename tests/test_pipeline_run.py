@@ -63,6 +63,7 @@ from tests.test_counting_session import (
     CLASSE_COCO_POR_CATEGORIA,
     ByteTrackDuble,
     ParadaDuble,
+    ParadaPedidaDepoisDeNChamadas,
 )
 
 
@@ -266,6 +267,40 @@ def test_AC_012_5_encerrar_no_processamento_termina_cancelado_com_videos_mantido
     assert list(data_dir.glob("*.xlsx")) == []
     with conectar(data_dir) as conexao:
         assert ler_agregados(conexao, estado.id_sessao) == ()
+
+
+def test_AC_012_5_parada_no_ultimo_clipe_termina_cancelado_sem_planilha(
+    data_dir, modelo, clipes_legiveis
+):
+    """O pedido chega com o único clipe da sessão já em análise (SUP-108).
+
+    Antes, só se consultava a parada entre clipes: o pedido era ignorado e a
+    sessão terminava concluída, com planilha e eventos no banco.
+    """
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 1)
+    detector = DetectorDuble()
+    fabricas = iter(
+        [ParadaNunca, lambda: ParadaPedidaDepoisDeNChamadas(detector, chamadas=1)]
+    )
+
+    estado, _ = executa(
+        data_dir,
+        servidor,
+        relogio,
+        minutos=1,
+        criar_detector=lambda caminho, config: detector,
+        criar_parada=lambda: next(fabricas)(),
+    )
+
+    assert estado.fase is Fase.PROCESSAMENTO_CANCELADO
+    assert estado.planilha is None
+    assert detector.chamadas == 1
+    assert videos(dir_da_sessao(data_dir)) == ["minuto-01.mp4"]
+    assert list(data_dir.glob("*.xlsx")) == []
+    with conectar(data_dir) as conexao:
+        assert ler_agregados(conexao, estado.id_sessao) == ()
+        assert ler_eventos(conexao, estado.id_sessao) == ()
 
 
 def test_AC_012_6_sessao_sem_minuto_capturado_termina_sem_planilha_com_status(

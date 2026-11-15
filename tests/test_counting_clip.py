@@ -11,6 +11,9 @@ Critérios cobertos, de `.spec/features/contagem-veiculos/spec.md`:
 - AC-007.3 — dois clipes processados em sequência usam rastreadores
   independentes, e nenhum id de rastreio é reaproveitado entre eles.
 
+E, de `interface-sessao`, AC-012.5: o pedido de parada interrompe o clipe em
+análise, e não só o clipe seguinte (SUP-108).
+
 Mais o caminho de D-4: clipe ausente ou ilegível devolve resultado com motivo,
 sem exceção.
 
@@ -31,12 +34,14 @@ from pathlib import Path
 
 import cv2
 import numpy as np
+import pytest
 import supervision as sv
 
 from auto_counter.cameras.model import Camera, Linha, Ponto
 from auto_counter.counting.clip import processar_clipe
 from auto_counter.counting.config import Categoria, ConfiguracaoDoProcessamento
 from auto_counter.counting.sampling import MOTIVO_NAO_ABRE, FrameAmostrado
+from auto_counter.counting.session import ProcessamentoCancelado
 
 LARGURA = 128
 ALTURA = 48
@@ -168,6 +173,7 @@ def processa(
     id_do_bytetrack: int = 7,
     inicio_do_clipe: datetime = INICIO_DO_CLIPE,
     ao_gerar_evento=None,
+    parada=None,
 ):
     """Roda `processar_clipe` com os dublês do teste."""
     return processar_clipe(
@@ -179,6 +185,7 @@ def processa(
         config=ConfiguracaoDoProcessamento(amostragem=amostragem),
         fabrica_de_bytetrack=lambda: ByteTrackDuble(id_do_bytetrack),
         **({} if ao_gerar_evento is None else {"ao_gerar_evento": ao_gerar_evento}),
+        **({} if parada is None else {"parada": parada}),
     )
 
 
@@ -390,3 +397,49 @@ def test_AC_016_8_clipe_que_falha_no_meio_chama_o_gancho_e_devolve_sem_eventos(
     assert len(recebidos) == 1
     assert resultado.eventos == ()
     assert resultado.motivo == MOTIVO_NAO_ABRE
+
+
+class ParadaPedidaDepoisDeNFrames:
+    """A parada de AC-012.5 chegando durante a análise do clipe.
+
+    Fica desligada até o detector ter recebido `frames` frames, que é o que
+    acontece quando o usuário clica com o clipe já em andamento.
+    """
+
+    def __init__(self, detector: DetectorDuble, frames: int) -> None:
+        self._detector = detector
+        self._frames = frames
+
+    def foi_pedida(self) -> bool:
+        return len(self._detector.indices_recebidos) >= self._frames
+
+
+class ParadaNunca:
+    def foi_pedida(self) -> bool:
+        return False
+
+
+def test_AC_012_5_parada_pedida_no_meio_do_clipe_interrompe_antes_do_fim(tmp_path):
+    """31 quadros com amostragem 3 são 11 frames analisados; a parada chega após 2.
+
+    O detector não pode receber o terceiro: o clipe é interrompido no meio, sem
+    esperar o fim dele.
+    """
+    caminho = escreve_video(tmp_path / "clipe.mp4", 31)
+    detector = DetectorDuble([])
+    parada = ParadaPedidaDepoisDeNFrames(detector, frames=2)
+
+    with pytest.raises(ProcessamentoCancelado) as cancelamento:
+        processa(caminho, detector, parada=parada)
+
+    assert detector.indices_recebidos == [0, 3]
+    assert str(MINUTO) in str(cancelamento.value)
+
+
+def test_sem_parada_o_clipe_se_comporta_como_antes(tmp_path):
+    caminho = escreve_video(tmp_path / "clipe.mp4", 31)
+
+    sem = processa(caminho, DetectorDuble(DOIS_CRUZAMENTOS))
+    com = processa(caminho, DetectorDuble(DOIS_CRUZAMENTOS), parada=ParadaNunca())
+
+    assert sem == com
