@@ -3,8 +3,15 @@
 Comportamento em `.spec/features/interface-sessao/spec.md`: AC-011.4 (o pipeline
 roda até o XLSX sem a interface web), AC-012.1 e AC-012.2 (o estado acompanha a
 captura e o processamento), AC-012.3 (o desfecho traz o status gravado e a
-planilha), AC-012.5 (encerrar no processamento cancela e preserva os vídeos) e
-AC-012.6 (sessão sem clipe processável termina sem planilha).
+planilha), AC-012.5 (encerrar no processamento cancela e preserva os vídeos),
+AC-012.6 (sessão sem clipe processável termina sem planilha) e AC-012.7
+(encerrar na captura pelo botão da interface cancela a sessão inteira).
+
+A origem da parada na captura decide o que acontece depois dela (D-19): o
+arquivo de pedido existe só quando o botão da interface o criou, e aí a sessão
+é cancelada, sem contagem, com os clipes apagados e a marca no banco. Sem o
+arquivo, a parada foi o Ctrl+C no terminal e vale AC-003.6 de `captura-clipes`:
+os minutos capturados seguem para o processamento.
 
 Esta função é o que `session run` executa e, por consequência, o que a interface
 dispara. Ela **não** pega a trava de sessão única (quem pega é o comando, T-12)
@@ -39,6 +46,7 @@ from pathlib import Path
 import httpx
 
 from auto_counter.cameras.model import Camera
+from auto_counter.capture.cleanup import descartar_videos
 from auto_counter.capture.duration import validar_duracao
 from auto_counter.capture.session import Parada, capturar
 from auto_counter.counting.clip import DetectorDoClipe
@@ -51,16 +59,58 @@ from auto_counter.pipeline.processing import (
     persistir_e_descartar,
     processar,
 )
-from auto_counter.pipeline.state import AnotadorDoEstado, EstadoDaSessao, Fase
-from auto_counter.pipeline.stop import consumir_pedido
+from auto_counter.pipeline.state import (
+    MENSAGEM_SESSAO_CANCELADA,
+    AnotadorDoEstado,
+    EstadoDaSessao,
+    Fase,
+)
+from auto_counter.pipeline.stop import ParadaPorArquivo, consumir_pedido
 from auto_counter.storage.connection import conectar
-from auto_counter.storage.sessions import PersistenciaDaCaptura, ler_sessao
+from auto_counter.storage.sessions import (
+    PersistenciaDaCaptura,
+    ler_sessao,
+    marcar_sessao_cancelada,
+)
 
 MENSAGEM_SEM_CLIPE = (
     "nenhum clipe da sessão pôde ser processado; não há planilha. O status da "
     "sessão continua registrado."
 )
 """AC-012.6: o que a interface mostra quando não há o que exportar."""
+
+
+def _cancelar_a_sessao(
+    data_dir: Path,
+    id_sessao: str,
+    dir_sessao: Path,
+    anotador: AnotadorDoEstado,
+    *,
+    status: str,
+) -> None:
+    """O cancelamento da captura pelo botão da interface (AC-012.7, D-21).
+
+    Marca a sessão no banco, apaga os clipes seja qual for `manter_videos` e
+    termina em `SESSAO_CANCELADA`. Falha ao marcar só avisa (SUP-111): os
+    minutos capturados não voltam, e o cancelamento que o usuário pediu não pode
+    virar falha por causa do banco.
+    """
+    try:
+        with conectar(data_dir) as conexao:
+            marcar_sessao_cancelada(conexao, id_sessao)
+    except Exception as falha:  # noqa: BLE001
+        print(
+            f"aviso: não foi possível marcar a sessão {id_sessao} como cancelada "
+            f"no banco: {falha}",
+            file=sys.stderr,
+        )
+    descartar_videos(dir_sessao)
+    anotador.terminar(
+        Fase.SESSAO_CANCELADA,
+        id_sessao=id_sessao,
+        status=status,
+        mensagem=MENSAGEM_SESSAO_CANCELADA,
+    )
 
 
 def executar_sessao(
@@ -84,9 +134,10 @@ def executar_sessao(
     arquivo isso já é garantido pelo consumo entre as fases; a fábrica garante
     o mesmo para o Ctrl+C, cujo sinal é um objeto em memória.
 
-    Termina com sucesso (`CONCLUIDA`), sem planilha (`SEM_PLANILHA`) ou com o
-    processamento cancelado (`PROCESSAMENTO_CANCELADO`). Qualquer falha marca
-    `FALHOU` e relevanta.
+    Termina com sucesso (`CONCLUIDA`), sem planilha (`SEM_PLANILHA`), com o
+    processamento cancelado (`PROCESSAMENTO_CANCELADO`) ou com a sessão cancelada
+    na captura pelo botão da interface (`SESSAO_CANCELADA`, AC-012.7). Qualquer
+    falha marca `FALHOU` e relevanta.
     """
     duracao = validar_duracao(minutos)
     data_dir = Path(data_dir)
@@ -138,7 +189,19 @@ def executar_sessao(
             )
         id_sessao = captura.id_sessao
 
-        # O pedido que encerrou a captura não vale para o processamento.
+        # O arquivo de pedido só existe se o botão da interface o criou (D-19):
+        # o Ctrl+C é um objeto em memória. Conferir **antes** de consumir.
+        if ParadaPorArquivo(data_dir).foi_pedida():
+            _cancelar_a_sessao(
+                data_dir,
+                captura.id_sessao,
+                captura.dir_sessao,
+                anotador,
+                status=captura.status.value,
+            )
+            return anotador.estado
+
+        # O pedido que encerrou a captura (Ctrl+C) não vale para o processamento.
         consumir_pedido(data_dir)
 
         if not captura.minutos_capturados:

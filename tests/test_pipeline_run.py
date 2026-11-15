@@ -6,10 +6,11 @@ Critérios cobertos, de `.spec/features/interface-sessao/spec.md`:
 - AC-012.1 e AC-012.2 — o estado acompanha cada minuto e a mudança de fase;
 - AC-012.3 — o estado final traz o status gravado no banco e a planilha;
 - AC-012.5 — encerrar no processamento termina cancelado, com os vídeos mantidos;
+- AC-012.7 — encerrar na captura pela interface cancela a sessão inteira;
 - AC-012.6 — sessão sem clipe processável termina sem planilha, com o status.
 
-E, de `captura-clipes`, AC-003.6: encerrar na captura segue para o
-processamento. Servidor, relógio, espera e detector são dublês; nada aqui toca a
+E, de `captura-clipes`, AC-003.6: a interrupção por Ctrl+C na captura segue
+para o processamento. Servidor, relógio, espera e detector são dublês; nada aqui toca a
 rede nem grava fora de `tmp_path`.
 """
 
@@ -30,7 +31,12 @@ from auto_counter.counting.sampling import (
     FrameAmostrado,
 )
 from auto_counter.pipeline.run import executar_sessao
-from auto_counter.pipeline.state import AnotadorDoEstado, Fase, ler_estado
+from auto_counter.pipeline.state import (
+    MENSAGEM_SESSAO_CANCELADA,
+    AnotadorDoEstado,
+    Fase,
+    ler_estado,
+)
 from auto_counter.pipeline.stop import (
     NOME_DO_PEDIDO,
     ParadaPorArquivo,
@@ -221,6 +227,9 @@ def test_AC_012_3_o_estado_final_traz_o_status_do_banco_e_o_caminho_da_planilha(
 def test_AC_003_6_encerrar_na_captura_nao_cancela_o_processamento(
     data_dir, modelo, clipes_legiveis
 ):
+    # A parada vem de um objeto em memória, e não do arquivo de pedido: é o
+    # Ctrl+C no terminal. Só o botão da interface cria o arquivo, e esse caminho
+    # cancela a sessão (AC-012.7, abaixo).
     relogio = RelogioFalso()
     servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 5)
     # A parada chega no meio da janela do minuto 3: duração real 2.
@@ -832,3 +841,148 @@ def test_falha_ao_listar_clipes_nao_derruba_a_sessao(
     assert estado.planilha is not None
     assert ler_estado(data_dir).clipes is None
     assert "aviso" in capsys.readouterr().err
+
+
+# --- AC-012.7: parar na captura pela interface cancela a sessão inteira ---
+
+
+class ParadaQueCriaOPedido:
+    """O clique em "Parar antecipadamente" durante a captura.
+
+    A partir de `segundo` no relógio falso, grava o arquivo de pedido, como faz
+    `encerrar_sessao`, e a captura enxerga a parada como em `session run`, que
+    consulta o arquivo.
+    """
+
+    def __init__(self, relogio, segundo, data_dir):
+        self._relogio = relogio
+        self._segundo = segundo
+        self._data_dir = data_dir
+
+    def foi_pedida(self) -> bool:
+        if self._relogio.decorrido() >= self._segundo:
+            pedir_parada(self._data_dir)
+            return True
+        return False
+
+
+class PedidoQueChegaSemSerVistoPelaCaptura(ParadaQueCriaOPedido):
+    """O clique que chega quando a captura já não vai mais consultar a parada."""
+
+    def foi_pedida(self) -> bool:
+        super().foi_pedida()
+        return False
+
+
+def cancela_na_captura(data_dir, clipes_legiveis, *, manter_videos=False, minutos=5):
+    """Roda a sessão com o botão apertado no meio do minuto 3 da captura."""
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos)
+    chamadas_do_detector = []
+
+    def criar_detector(caminho, config):
+        chamadas_do_detector.append(caminho)
+        return DetectorDuble()
+
+    estado, _ = executa(
+        data_dir,
+        servidor,
+        relogio,
+        minutos=minutos,
+        criar_detector=criar_detector,
+        criar_parada=lambda: ParadaQueCriaOPedido(relogio, 80.0, data_dir),
+        manter_videos=manter_videos,
+    )
+    return estado, chamadas_do_detector
+
+
+def test_AC_012_7_parar_na_captura_pela_interface_nao_processa(
+    data_dir, modelo, clipes_legiveis
+):
+    estado, chamadas_do_detector = cancela_na_captura(data_dir, clipes_legiveis)
+
+    assert estado.fase is Fase.SESSAO_CANCELADA
+    assert estado.planilha is None
+    assert chamadas_do_detector == []
+    assert list(data_dir.glob("*.xlsx")) == []
+    with conectar(data_dir) as conexao:
+        assert ler_agregados(conexao, estado.id_sessao) == ()
+
+
+def test_AC_012_7_parar_na_captura_apaga_os_clipes_mesmo_com_manter_videos(
+    data_dir, modelo, clipes_legiveis
+):
+    estado, _ = cancela_na_captura(data_dir, clipes_legiveis, manter_videos=True)
+
+    sessao = dir_da_sessao(data_dir)
+    assert estado.fase is Fase.SESSAO_CANCELADA
+    assert videos(sessao) == []
+    assert (sessao / "manifest.json").is_file()
+
+
+def test_AC_012_7_parar_na_captura_marca_a_sessao_no_banco_sem_eventos(
+    data_dir, modelo, clipes_legiveis
+):
+    estado, _ = cancela_na_captura(data_dir, clipes_legiveis)
+
+    with conectar(data_dir) as conexao:
+        gravada = ler_sessao(conexao, estado.id_sessao)
+        eventos = ler_eventos(conexao, estado.id_sessao)
+    assert gravada.cancelada_pelo_usuario is True
+    assert eventos == ()
+
+
+def test_AC_012_7_parar_na_captura_grava_terminada_em_e_a_mensagem(
+    data_dir, modelo, clipes_legiveis
+):
+    cancela_na_captura(data_dir, clipes_legiveis)
+
+    gravado = ler_estado(data_dir)
+    assert gravado.fase is Fase.SESSAO_CANCELADA
+    assert gravado.terminada_em is not None
+    assert gravado.mensagem == MENSAGEM_SESSAO_CANCELADA
+    assert gravado.id_sessao is not None
+
+
+def test_AC_012_7_falha_ao_marcar_no_banco_so_avisa_e_cancela_assim_mesmo(
+    data_dir, modelo, clipes_legiveis, monkeypatch, capsys
+):
+    def falha(conexao, id_sessao, **kwargs):
+        raise RuntimeError("banco indisponível")
+
+    monkeypatch.setattr("auto_counter.pipeline.run.marcar_sessao_cancelada", falha)
+
+    estado, chamadas_do_detector = cancela_na_captura(data_dir, clipes_legiveis)
+
+    assert estado.fase is Fase.SESSAO_CANCELADA
+    assert chamadas_do_detector == []
+    assert videos(dir_da_sessao(data_dir)) == []
+    erro = capsys.readouterr().err
+    assert "cancelada" in erro and "banco indisponível" in erro
+
+
+def test_AC_012_7_pedido_que_chega_com_a_captura_ja_no_fim_cancela(
+    data_dir, modelo, clipes_legiveis
+):
+    """A captura termina sozinha, sem ver a parada, e o arquivo já existe.
+
+    Com 2 minutos o último clipe publica em 60 s do relógio falso, então o
+    pedido a 50 s cai dentro da captura e ela não o enxerga.
+    """
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 2)
+
+    estado, detectores = executa(
+        data_dir,
+        servidor,
+        relogio,
+        minutos=2,
+        criar_parada=lambda: PedidoQueChegaSemSerVistoPelaCaptura(
+            relogio, 50.0, data_dir
+        ),
+    )
+
+    assert estado.fase is Fase.SESSAO_CANCELADA
+    assert estado.minutos_capturados == (1, 2)
+    assert detectores == []
+    assert videos(dir_da_sessao(data_dir)) == []
