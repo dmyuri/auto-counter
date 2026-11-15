@@ -38,6 +38,7 @@ os rótulos da tela. A trava de `upload` é acompanhada como a de `run`.
 """
 
 import sqlite3
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from enum import Enum
@@ -221,6 +222,28 @@ def _agora() -> datetime:
 def _segundos(inicio: datetime, fim: datetime) -> int:
     """Segundos inteiros de `inicio` a `fim`, truncados e nunca negativos."""
     return max(0, int((fim - inicio).total_seconds()))
+
+
+def segundos_desde_t0(t0: datetime, instante: datetime) -> int:
+    """Segundos de `t0` a `instante`, truncados e nunca negativos (D-11)."""
+    return _segundos(t0, instante)
+
+
+def aviso_de_servidor_indisponivel(
+    minutos_perdidos: Sequence[int], *, desde_segundos: int | None
+) -> str:
+    """A frase de AC-035.1, a mesma na interface e no terminal (D-12).
+
+    `desde_segundos` é o instante da primeira falha relativo a T0, no formato de
+    AC-017.1.
+    """
+    desde = (
+        ""
+        if desde_segundos is None
+        else f" desde {formatar_tempo(desde_segundos)} da sessão"
+    )
+    perdidos = ", ".join(str(minuto) for minuto in minutos_perdidos)
+    return f"Servidor indisponível{desde}; minutos perdidos: {perdidos}"
 
 
 @dataclass(frozen=True)

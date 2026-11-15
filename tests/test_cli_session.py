@@ -323,3 +323,90 @@ def test_session_capture_grava_a_linha_da_sessao_no_banco(
     assert sessao_no_banco.duracao_pedida == 1
     assert sessao_no_banco.duracao_real == 1
     assert sessao_no_banco.status is StatusDaSessao.COMPLETA
+
+
+# --- servidor-indisponivel: terminal (T-09, D-11, D-12) ---
+
+
+def captura(runner, registro, minutos: int):
+    return runner.invoke(
+        app,
+        [
+            "session",
+            "capture",
+            "000013",
+            "--minutes",
+            str(minutos),
+            "--config-dir",
+            str(registro),
+        ],
+    )
+
+
+def test_AC_035_4_session_capture_imprime_servidor_indisponivel_e_os_perdidos(
+    runner, registro, monkeypatch, clipes_legiveis
+):
+    from tests.test_capture_session import servidor_que_cai_depois_do_minuto_3
+
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+    liga_o_servidor(monkeypatch, servidor, relogio)
+
+    resultado = captura(runner, registro, 5)
+
+    # O código de saída é o do desfecho de sempre da captura: 0.
+    assert resultado.exit_code == 0, resultado.output
+    assert "Traceback" not in resultado.output
+    # A primeira falha foi a checagem de t=103, e os perdidos são 4 e 5.
+    assert (
+        "Servidor indisponível desde 01:43 da sessão; minutos perdidos: 4, 5"
+        in resultado.output
+    )
+
+
+def test_AC_035_4_session_capture_com_o_servidor_fora_desde_o_inicio_sai_com_zero(
+    runner, registro, monkeypatch, clipes_legiveis
+):
+    from tests.test_capture_session import FORA_DO_AR, ServidorComFalhas
+
+    relogio = RelogioFalso()
+    servidor = ServidorComFalhas(
+        relogio,
+        [(0.0, "clipe-a")],
+        clipes_legiveis("clipe-a"),
+        indisponivel=[(0.0, FORA_DO_AR, "conexao")],
+    )
+    liga_o_servidor(monkeypatch, servidor, relogio)
+
+    resultado = captura(runner, registro, 3)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert (
+        "Servidor indisponível desde 00:00 da sessão; minutos perdidos: 1, 2, 3"
+        in resultado.output
+    )
+
+
+def test_AC_035_5_session_capture_sem_a_marca_nao_imprime_servidor_indisponivel(
+    runner, registro, monkeypatch, clipes_legiveis
+):
+    from tests.test_capture_session import (
+        FORA_DO_AR,
+        QUEDA_DEPOIS_DO_MINUTO_3,
+        servidor_que_cai_depois_do_minuto_3,
+    )
+
+    relogio = RelogioFalso()
+    # Só o minuto 4 cai (N = 4): há um minuto com servidor indisponível, mas
+    # nenhum encerramento, e o terminal não diz nada sobre servidor.
+    servidor = servidor_que_cai_depois_do_minuto_3(
+        relogio,
+        clipes_legiveis,
+        indisponivel=[(QUEDA_DEPOIS_DO_MINUTO_3, FORA_DO_AR, "conexao")],
+    )
+    liga_o_servidor(monkeypatch, servidor, relogio)
+
+    resultado = captura(runner, registro, 4)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert "servidor indisponível" not in resultado.output.lower()

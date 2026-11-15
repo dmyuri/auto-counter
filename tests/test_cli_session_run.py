@@ -272,3 +272,65 @@ def test_AC_012_7_session_run_cancelada_na_captura_sai_com_codigo_zero(
     assert list(data_dir.glob("*.xlsx")) == []
     assert videos(dir_da_sessao(data_dir)) == []
     assert not (data_dir / NOME_DA_TRAVA).exists()
+
+
+# --- servidor-indisponivel: terminal (T-09, D-11, D-12) ---
+
+
+def test_AC_035_4_session_run_com_planilha_imprime_a_linha_e_sai_com_zero(
+    runner, registro, data_dir, modelo, detector, monkeypatch, clipes_legiveis
+):
+    from tests.test_capture_session import servidor_que_cai_depois_do_minuto_3
+
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai_depois_do_minuto_3(relogio, clipes_legiveis)
+    liga_o_servidor(monkeypatch, servidor, relogio)
+
+    resultado = roda(runner, registro, 5)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert len(list(data_dir.glob("*.xlsx"))) == 1
+    assert (
+        "Servidor indisponível desde 01:43 da sessão; minutos perdidos: 4, 5"
+        in resultado.output
+    )
+    assert "Traceback" not in resultado.output
+
+
+def test_AC_035_4_session_run_sem_planilha_imprime_a_linha_e_mantem_o_codigo(
+    runner, registro, data_dir, modelo, detector, monkeypatch, clipes_legiveis
+):
+    from tests.test_capture_session import FORA_DO_AR, ServidorComFalhas
+
+    relogio = RelogioFalso()
+    servidor = ServidorComFalhas(
+        relogio,
+        [(0.0, "clipe-a")],
+        clipes_legiveis("clipe-a"),
+        indisponivel=[(0.0, FORA_DO_AR, "timeout")],
+    )
+    liga_o_servidor(monkeypatch, servidor, relogio)
+
+    resultado = roda(runner, registro, 3)
+
+    # O mesmo código de qualquer sessão sem planilha (`session run`): 1.
+    assert resultado.exit_code == 1
+    assert (
+        "Servidor indisponível desde 00:00 da sessão; minutos perdidos: 1, 2, 3"
+        in resultado.output
+    )
+    assert "não há planilha" in resultado.output
+    assert list(data_dir.glob("*.xlsx")) == []
+
+
+def test_AC_035_5_session_run_sem_a_marca_nao_imprime_servidor_indisponivel(
+    runner, registro, data_dir, modelo, detector, monkeypatch, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 2)
+    liga_o_servidor(monkeypatch, servidor, relogio)
+
+    resultado = roda(runner, registro)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert "servidor indisponível" not in resultado.output.lower()

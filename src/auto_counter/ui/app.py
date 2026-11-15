@@ -123,6 +123,7 @@ from auto_counter.pipeline.progress import (
     Resultado,
     Situacao,
     VideoNaTela,
+    aviso_de_servidor_indisponivel,
     formatar_tempo,
     ler_progresso,
 )
@@ -991,13 +992,12 @@ def _aviso_de_servidor_indisponivel(resultado: Resultado) -> None:
     """
     if not resultado.encerrada_por_servidor_indisponivel:
         return
-    perdidos = ", ".join(str(minuto) for minuto in resultado.minutos_perdidos)
-    desde = (
-        ""
-        if resultado.servidor_indisponivel_desde is None
-        else f" desde {formatar_tempo(resultado.servidor_indisponivel_desde)} da sessão"
+    st.warning(
+        aviso_de_servidor_indisponivel(
+            resultado.minutos_perdidos,
+            desde_segundos=resultado.servidor_indisponivel_desde,
+        )
     )
-    st.warning(f"Servidor indisponível{desde}; minutos perdidos: {perdidos}")
 
 
 def _desfecho_da_conclusao(resultado: Resultado) -> None:
