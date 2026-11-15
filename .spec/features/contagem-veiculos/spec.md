@@ -227,4 +227,5 @@ Revisado história por história.
 - `interface-sessao` — AC-012.2 expõe a segunda fase, cujo tempo é limitado por
   AC-005.4; se o orçamento de performance for renegociado por SUP-017, a espera
   que a interface anuncia muda junto. AC-012.5 exige que o processamento possa
-  ser interrompido entre dois minutos sem gravar resultado.
+  ser interrompido no meio do clipe em análise, e não só entre dois minutos, sem
+  gravar resultado (SUP-108 de `interface-sessao`).

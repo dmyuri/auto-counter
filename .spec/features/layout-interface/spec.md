@@ -175,8 +175,18 @@ Critérios de aceite:
   AC-023.1 — Dado uma sessão em andamento iniciada pela interface, quando a
   interface é consultada, então o botão de iniciar não aparece e, no lugar dele,
   aparece "Parar antecipadamente". Acioná-lo pede confirmação com o aviso da fase
-  atual. Só a confirmação encerra a sessão, e encerra pelas regras de AC-003.6 na
-  captura e de AC-012.5 no processamento.
+  atual. Na captura, o aviso diz que a sessão será cancelada, que os minutos já
+  capturados serão descartados e que nenhuma contagem será feita. Só a
+  confirmação encerra a sessão: na captura, cancela a sessão inteira pela regra
+  de AC-012.7, e no processamento, cancela pela regra de AC-012.5.
+  > **Alterado em 2026-11-14:** "Dado uma sessão em andamento iniciada pela
+  > interface, quando a interface é consultada, então o botão de iniciar não
+  > aparece e, no lugar dele, aparece "Parar antecipadamente". Acioná-lo pede
+  > confirmação com o aviso da fase atual. Só a confirmação encerra a sessão, e
+  > encerra pelas regras de AC-003.6 na captura e de AC-012.5 no
+  > processamento." Motivo: parar na captura pela interface passou a encerrar a
+  > sessão inteira, sem seguir para a contagem (AC-012.7), e o aviso da captura
+  > deixou de poder dizer que os minutos capturados serão processados.
 
   AC-023.2 — Dado uma sessão concluída com planilha, quando o resultado é
   exibido, então o painel "Sessão finalizada" mostra:
@@ -191,10 +201,16 @@ Critérios de aceite:
   "Baixar .xlsx", então o arquivo entregue é o mesmo de AC-012.3 e o botão passa
   a mostrar "✓ Baixado" enquanto aquele resultado estiver na tela.
 
-  AC-023.4 — Dado o resultado de uma sessão com processamento cancelado
-  (AC-012.5), sem planilha (AC-012.6) ou que falhou (AC-018.3, AC-018.4), quando
-  o resultado é exibido, então o painel de resultados mostra a mensagem daquele
-  desfecho e nenhum cartão de planilha.
+  AC-023.4 — Dado o resultado de uma sessão cancelada pelo usuário na captura
+  (AC-012.7), com processamento cancelado (AC-012.5), sem planilha (AC-012.6) ou
+  que falhou (AC-018.3, AC-018.4), quando o resultado é exibido, então o painel
+  de resultados mostra a mensagem daquele desfecho e nenhum cartão de planilha.
+  > **Alterado em 2026-11-14:** "Dado o resultado de uma sessão com
+  > processamento cancelado (AC-012.5), sem planilha (AC-012.6) ou que falhou
+  > (AC-018.3, AC-018.4), quando o resultado é exibido, então o painel de
+  > resultados mostra a mensagem daquele desfecho e nenhum cartão de planilha."
+  > Motivo: a sessão cancelada na captura (AC-012.7) é um desfecho novo, também
+  > sem planilha.
 
   AC-023.5 — Dado um resultado exibido, enquanto "Nova sessão" não for acionado,
   quando a interface é consultada, então o botão de iniciar não aparece, os
@@ -290,7 +306,8 @@ Critérios de aceite:
 - [x] SUP-071 — "Parar antecipadamente" é o novo rótulo de "Encerrar sessão", e
   a confirmação continua. O protótipo para com um clique, mas AC-012.4 exige
   ação explícita, e encerrar a captura custa minutos que não voltam. Confirmado
-  pelo autor. Afeta AC-023.1.
+  pelo autor. Afeta AC-023.1. Com AC-012.7 o motivo ficou mais forte: parar na
+  captura pela interface descarta também os minutos já capturados.
 - [x] SUP-072 — Removida na revisão de 2026-11-07: não mudava o resultado. A
   definição de "N registros" está no próprio AC-023.2.
 - [x] SUP-073 — "✓ Baixado" registra que o botão foi acionado naquela aba. Não
@@ -305,7 +322,9 @@ Critérios de aceite:
   "Interrompida pelo usuário · MM:SS", com o tempo total da sessão. O protótipo
   mostra o instante da parada, mas aqui o processamento continua depois da
   parada, e o tempo que interessa é o da sessão inteira (AC-018.1). Confirmado
-  pelo autor. Afeta AC-023.2.
+  pelo autor. Afeta AC-023.2. Pela interface esse texto deixou de ocorrer,
+  porque parar na captura cancela a sessão (AC-012.7). Ele continua para a
+  sessão interrompida por Ctrl+C no terminal (AC-003.6).
 
 ## Perguntas em aberto
 
@@ -339,6 +358,10 @@ Revisado história por história.
     depois de "Nova sessão" (AC-023.7).
   - AC-012.5 e AC-012.6: as mensagens vão para o painel de resultados, sem
     cartão de planilha (AC-023.4).
+  - AC-012.7: "Parar antecipadamente" na captura cancela a sessão inteira por
+    essa regra, e não mais por AC-003.6 (AC-023.1). A mensagem "Sessão
+    cancelada pelo usuário" vai para o painel de resultados, sem cartão de
+    planilha (AC-023.4).
   - Comportamento sem critério próprio que muda: hoje o formulário de iniciar
     fica disponível logo depois do fim da sessão. Com AC-023.5, ele só volta
     depois de "Nova sessão".
@@ -371,6 +394,8 @@ Revisado história por história.
   - A tela clicável de calibração, fora de escopo lá, continua fora.
 - `captura-clipes`
   - AC-003.6: é a origem do texto "Interrompida pelo usuário" de AC-023.2.
+    Deixou de valer para o botão da interface (AC-023.1 e AC-012.7), e o texto
+    só aparece para sessão interrompida por Ctrl+C no terminal.
   - Nenhum outro critério muda: a prévia não faz download (AC-020.2).
 - `persistencia-resultados`
   - Contexto e Fora de escopo, "Nenhuma imagem é persistida" e "Guardar

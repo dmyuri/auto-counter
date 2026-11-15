@@ -133,11 +133,18 @@ Critérios de aceite:
   inclusive depois de fechada e reaberta, então o tempo total exibido é o mesmo
   nas duas consultas.
 
-  AC-018.3 — Dado uma sessão com processamento cancelado (AC-012.5), sem planilha
-  (AC-012.6) ou terminada em falha registrada pelo próprio processo da sessão,
-  quando o usuário acessa o resultado, então a interface exibe o tempo total da
-  sessão, igual ao instante de término menos T0, e nenhuma quantidade de
-  veículos.
+  AC-018.3 — Dado uma sessão cancelada pelo usuário na captura (AC-012.7), com
+  processamento cancelado (AC-012.5), sem planilha (AC-012.6) ou terminada em
+  falha registrada pelo próprio processo da sessão, quando o usuário acessa o
+  resultado, então a interface exibe o tempo total da sessão, igual ao instante
+  de término menos T0, e nenhuma quantidade de veículos.
+  > **Alterado em 2026-11-14:** "Dado uma sessão com processamento cancelado
+  > (AC-012.5), sem planilha (AC-012.6) ou terminada em falha registrada pelo
+  > próprio processo da sessão, quando o usuário acessa o resultado, então a
+  > interface exibe o tempo total da sessão, igual ao instante de término menos
+  > T0, e nenhuma quantidade de veículos." Motivo: a sessão cancelada na captura
+  > (AC-012.7 de `interface-sessao`) é um desfecho novo em que nenhuma contagem
+  > chegou a ser feita.
 
   AC-018.4 — Dado uma sessão cujo processo terminou sem concluir, sem registrar
   desfecho, quando o usuário acessa o resultado, então a interface não exibe
@@ -201,6 +208,8 @@ Critérios de aceite:
     próprio processo, mostra só o tempo total. Na cancelada nada foi gravado
     (AC-012.5), e na sem planilha os zeros seriam lidos como "nenhum veículo
     passou" (AC-012.6).
+  - Na cancelada pelo usuário na captura (AC-012.7), também mostra só o tempo
+    total, porque nenhuma contagem chegou a ser feita.
   - Quando o processo morre sem registrar desfecho, não mostra nem quantidades
     nem tempo, porque não há instante de término.
 
@@ -249,6 +258,8 @@ Revisado história por história.
     durante o processamento, e elas somem com o cancelamento.
   - AC-012.6: a sessão sem planilha passa a mostrar o tempo total, mas não as
     quantidades (AC-018.3), para não exibir zeros que pareçam contagem.
+  - AC-012.7: a sessão cancelada pelo usuário na captura mostra só o tempo
+    total, sem quantidades (AC-018.3).
   - Fora de escopo daquela spec: "Monitoramento contínuo, painel ao vivo das
     câmeras" continua fora. O que esta feature mostra ao vivo é a sessão em
     curso, não as câmeras.
@@ -281,7 +292,9 @@ Revisado história por história.
   - Fora de escopo daquela spec: "Processar vídeo durante a fase de captura" é
     preservado, e é o que impõe AC-016.5.
   - AC-003.6: o encerramento antecipado é uma das passagens para o
-    processamento cobertas por AC-017.2.
+    processamento cobertas por AC-017.2. Essa passagem só acontece pelo Ctrl+C
+    no terminal: pela interface, parar na captura cancela a sessão
+    (AC-012.7 de `interface-sessao`) e não há processamento.
   - AC-003.4: não muda. O relógio local de SUP-056 mede só a duração exibida,
     não o período da sessão.
 - `exportacao-xlsx` — nenhum critério alterado. A planilha não recebe o tempo da

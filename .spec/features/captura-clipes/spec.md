@@ -69,11 +69,22 @@ Critérios de aceite:
   > porque o upload não tem a opção de mantê-los (AC-030.6 e SUP-097).
   > Ver `.spec/features/processamento-upload/spec.md`.
 
-  AC-003.6 — Dado que o usuário interrompe explicitamente a captura no minuto k
-  de N minutos pedidos, quando a sessão é encerrada, então a duração real da
-  sessão passa a ser k, o status de AC-004.4 a AC-004.6 é calculado sobre k e não
-  sobre N, o encerramento pelo usuário fica registrado na sessão e os k minutos
-  já capturados seguem para processamento.
+  AC-003.6 — Dado que o usuário interrompe explicitamente a captura pelo terminal,
+  com Ctrl+C em `session capture` ou `session run`, no minuto k de N minutos
+  pedidos, quando a sessão é encerrada, então a duração real da sessão passa a
+  ser k, o status de AC-004.4 a AC-004.6 é calculado sobre k e não sobre N, o
+  encerramento pelo usuário fica registrado na sessão e os k minutos já
+  capturados seguem para processamento. A interrupção pelo botão "Parar
+  antecipadamente" da interface não segue esta regra (AC-012.7 de
+  `interface-sessao`).
+  > **Alterado em 2026-11-14:** "Dado que o usuário interrompe explicitamente a
+  > captura no minuto k de N minutos pedidos, quando a sessão é encerrada, então
+  > a duração real da sessão passa a ser k, o status de AC-004.4 a AC-004.6 é
+  > calculado sobre k e não sobre N, o encerramento pelo usuário fica registrado
+  > na sessão e os k minutos já capturados seguem para processamento." Motivo:
+  > pela interface, parar na captura passou a cancelar a sessão inteira, sem
+  > contagem (AC-012.7 de `interface-sessao`); a regra da duração real ficou só
+  > para o Ctrl+C no terminal.
 
 US-004 — Tolerar falha de captura sem invalidar a sessão inteira
 Como integrante do projeto de extensão, quero que uma falha momentânea não jogue
@@ -159,6 +170,8 @@ Critérios de aceite:
   comparar aquele número com o de outra sessão. O denominador é N pedido, exceto
   quando o usuário interrompe de propósito, caso em que AC-003.6 substitui N pela
   duração real — desistência nunca cai nesta regra. Afeta AC-004.5 e AC-004.6.
+  A interrupção de propósito que cai nesta regra é só a do terminal: pela
+  interface a sessão é cancelada (AC-012.7 de `interface-sessao`).
 - [x] SUP-051 — A identidade de **conteúdo** de um clipe é o sha256 dos bytes
   baixados, comparado apenas com o do clipe imediatamente anterior aceito na
   sessão. O ETag continua identificando o recurso no servidor (SUP-009), mas
@@ -182,7 +195,9 @@ Nenhuma pendente. Os IDs permanecem como histórico das decisões.
   15 min e parar no 7 produz uma sessão de 7 minutos, com o status calculado
   sobre 7 e o encerramento pelo usuário registrado. Não foi criado um quarto
   status: o vocabulário de três continua valendo e a sessão ganha apenas um campo
-  de encerramento em AC-008.1. Está em AC-003.6.
+  de encerramento em AC-008.1. Está em AC-003.6. Revista por Q-026 de
+  `interface-sessao`: a regra continua valendo para o Ctrl+C no terminal, mas
+  pelo botão da interface a sessão é cancelada inteira (AC-012.7).
 
 ## Specs afetadas
 
@@ -207,6 +222,7 @@ Revisado história por história.
   imprimir a duração real e o encerramento pelo usuário vindos de AC-003.6.
 - `interface-sessao` — AC-012.4 depende de AC-003.6 para o encerramento
   antecipado: fechar o navegador não interrompe nada, só ação explícita do
-  usuário aciona esta regra.
+  usuário aciona esta regra. Pela interface, a ação explícita na captura segue
+  AC-012.7, que cancela a sessão inteira, e não AC-003.6.
 - `validacao-acuracia` — AC-014.5 roda sem rede, sobre clipes preservados pela
   opção descrita em SUP-012, que é como os 3 clipes de referência são obtidos.

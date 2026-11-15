@@ -87,9 +87,15 @@ Critérios de aceite:
   presentes são listados e incluídos no `.zip`, e a interface informa que j
   clipes não estão mais em disco.
 
-  AC-025.6 — Dado uma sessão com processamento cancelado (AC-012.5), sem
-  planilha (AC-012.6) ou que falhou, quando o resultado é exibido, então nenhuma
-  lista de clipes nem botão de `.zip` é exibido.
+  AC-025.6 — Dado uma sessão cancelada pelo usuário na captura (AC-012.7), com
+  processamento cancelado (AC-012.5), sem planilha (AC-012.6) ou que falhou,
+  quando o resultado é exibido, então nenhuma lista de clipes nem botão de
+  `.zip` é exibido.
+  > **Alterado em 2026-11-14:** "Dado uma sessão com processamento cancelado
+  > (AC-012.5), sem planilha (AC-012.6) ou que falhou, quando o resultado é
+  > exibido, então nenhuma lista de clipes nem botão de `.zip` é exibido."
+  > Motivo: na sessão cancelada na captura (AC-012.7 de `interface-sessao`), os
+  > clipes são apagados mesmo com a opção ligada, então não há o que listar.
 
 ## Fora de escopo
 
@@ -123,7 +129,10 @@ Critérios de aceite:
   processamento, os vídeos ficam em disco seja qual for a opção, mas ficam para
   `session process` (AC-012.5), não para download. Na sessão sem planilha e na
   que falhou não há resultado ao qual os clipes se refiram. Confirmado pelo
-  autor. Afeta AC-025.6.
+  autor. Afeta AC-025.6. A captura encerrada pelo usuário que chega a ter lista
+  é só a interrompida por Ctrl+C no terminal (AC-003.6). Pelo botão da
+  interface, a sessão é cancelada e os clipes são apagados mesmo com a opção
+  ligada (AC-012.7), então não há lista.
 - [x] SUP-080 — A escolha feita ao iniciar é gravada no estado da sessão
   (`sessao_atual.json`). A interface lê esse campo para saber se mostra a lista
   ou o aviso de AC-024.3, e não abre o manifest da captura, por causa da D-9 de
@@ -153,13 +162,17 @@ Revisado história por história.
     (AC-025.1).
   - AC-012.5: não muda. O cancelamento no processamento mantém os vídeos seja
     qual for a opção, e a lista não aparece nesse caso (AC-025.6).
+  - AC-012.7: o cancelamento na captura apaga os clipes mesmo com a opção
+    ligada, e a lista não aparece (AC-025.6). AC-024.2 não é contrariado,
+    porque vale só para sessão com o processamento concluído.
 - `captura-clipes`
   - SUP-012: a opção de manter vídeos deixa de existir só na linha de comando.
     Na interface ela também vem desligada (AC-024.1), então o padrão é o
     mesmo nos dois caminhos.
   - AC-003.5: não muda, e é o que AC-024.2 e AC-024.3 aplicam.
   - AC-003.6: a sessão encerrada pelo usuário na captura tem lista de clipes
-    (SUP-079).
+    (SUP-079). Isso só ocorre pelo Ctrl+C no terminal, porque pela interface a
+    sessão é cancelada (AC-012.7).
 - `persistencia-resultados`
   - Contexto, "Os vídeos são apagados ao fim da sessão" e o motivo de
     privacidade para não guardar imagem: a exceção já existia pela flag, mas

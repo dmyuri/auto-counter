@@ -60,6 +60,12 @@ Critérios de aceite:
   sessão é executada de novo, então os eventos e agregados dela não são
   duplicados e o resultado final é igual ao da primeira execução.
 
+  AC-008.6 — Dado uma sessão cuja captura foi cancelada pelo usuário na interface
+  (AC-012.7 de `interface-sessao`), quando a sessão é encerrada, então o
+  registro dela continua no banco com a marca de cancelada pelo usuário,
+  distinta do status de AC-004.4 a AC-004.6, e sem nenhum evento nem agregado
+  gravado.
+
 US-009 — Consultar o histórico de sessões
 Como docente responsável pelo projeto, quero consultar as sessões já executadas
 mesmo depois do descarte dos vídeos, para comparar períodos sem precisar
@@ -71,7 +77,14 @@ Critérios de aceite:
 
   AC-009.2 — Dado várias sessões gravadas, quando o histórico é listado, então as
   sessões vêm ordenadas da mais recente para a mais antiga, cada uma com id da
-  câmera, período real, status e total de veículos contados.
+  câmera, período real, status e total de veículos contados, e a sessão
+  cancelada pelo usuário na captura (AC-008.6) aparece com essa marca.
+  > **Alterado em 2026-11-14:** "Dado várias sessões gravadas, quando o
+  > histórico é listado, então as sessões vêm ordenadas da mais recente para a
+  > mais antiga, cada uma com id da câmera, período real, status e total de
+  > veículos contados." Motivo: a sessão cancelada na captura fica no banco com
+  > total zero (AC-008.6), e sem a marca seria lida como sessão válida sem
+  > tráfego.
   > **Alterado por:** feature `processamento-upload`, em 2026-11-07.
   > A listagem passa a mostrar a origem de cada sessão, e o período de uma
   > sessão de upload é o horário do processamento (AC-030.2 e AC-030.3).
@@ -106,6 +119,10 @@ Critérios de aceite:
   arquivo do banco. Confirmado. Afeta AC-009.1 e AC-009.2.
 - [x] SUP-030 — Os timestamps são gravados em UTC no banco; a conversão para
   horário local acontece só na exportação. Afeta AC-008.2 e AC-008.3.
+- [x] SUP-109 — A marca de cancelada pelo usuário é um campo próprio do
+  registro de sessão, e não um quarto status: o vocabulário de três status
+  continua íntegro, como em Q-003. É campo novo em schema já commitado, então
+  exige migration numerada (Contexto). Afeta AC-008.6 e AC-009.2.
 
 ## Perguntas em aberto
 
@@ -114,7 +131,10 @@ história: o único ponto de negócio em disputa aqui era guardar ou não recort
 imagem, decidido por não guardar, com o efeito declarado em Fora de escopo. As
 decisões tomadas em outras specs que afetam o conteúdo destas tabelas — Q-003
 sobre sessão interrompida e Q-004 sobre cruzamento repetido — já estão
-respondidas e refletidas em AC-008.1 e no volume de eventos de AC-008.2.
+respondidas e refletidas em AC-008.1 e no volume de eventos de AC-008.2. Q-026
+de `interface-sessao`, sobre parar a captura pela interface, também está
+respondida e refletida em AC-008.6 e AC-009.2: a sessão cancelada fica no banco,
+marcada, sem eventos.
 
 ## Specs afetadas
 
@@ -134,6 +154,7 @@ Revisado história por história.
   campos novos de AC-008.1 são o que AC-010.4 imprime na aba Sessao.
 - `interface-sessao` — AC-012.3 mostra o status vindo de AC-008.1, e AC-012.4
   depende de o registro de sessão existir desde o início da captura para que o
-  progresso seja reencontrado ao reabrir a interface.
+  progresso seja reencontrado ao reabrir a interface. AC-012.7 é a origem da
+  marca de cancelada de AC-008.6 e do que AC-009.2 passa a mostrar.
 - `validacao-acuracia` — AC-014.1 compara contra os eventos gravados por
   AC-008.2.
