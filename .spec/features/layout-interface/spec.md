@@ -149,6 +149,11 @@ Critérios de aceite:
   P = ⌊R/M × 100⌋, e a barra de progresso na mesma proporção. Na captura,
   R é a soma de capturados e perdidos e M é a duração pedida. No processamento,
   R é o número de minutos analisados e M é o número de minutos a processar.
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > No encerramento por servidor indisponível, os minutos não tentados entram
+  > em R como perdidos, e o progresso da captura vai a 100% antes de a fase
+  > mudar (AC-033.5).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-022.5 — Dado uma sessão em captura com duração pedida de N minutos,
   iniciada em T0, com L minutos perdidos até ali e consultada no instante T,
@@ -196,6 +201,11 @@ Critérios de aceite:
   - o cartão da planilha, com o nome do arquivo de AC-010.1, o texto
     "N registros · contagem por categoria e por minuto", em que N é o número de
     eventos gravados da sessão, e o botão "Baixar .xlsx".
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > Passa a existir um terceiro texto, "Encerrada por servidor indisponível ·
+  > MM:SS", na sessão marcada como encerrada por servidor indisponível, com o
+  > aviso do instante da queda e dos minutos perdidos abaixo (AC-035.1).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-023.3 — Dado o cartão da planilha exibido, quando o usuário aciona
   "Baixar .xlsx", então o arquivo entregue é o mesmo de AC-012.3 e o botão passa
@@ -211,6 +221,12 @@ Critérios de aceite:
   > resultados mostra a mensagem daquele desfecho e nenhum cartão de planilha."
   > Motivo: a sessão cancelada na captura (AC-012.7) é um desfecho novo, também
   > sem planilha.
+
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > O resultado sem planilha da sessão encerrada por servidor indisponível passa
+  > a mostrar também o aviso com o instante da queda e os minutos perdidos
+  > (AC-035.2).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-023.5 — Dado um resultado exibido, enquanto "Nova sessão" não for acionado,
   quando a interface é consultada, então o botão de iniciar não aparece, os

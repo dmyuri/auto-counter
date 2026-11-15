@@ -38,6 +38,12 @@ Critérios de aceite:
   > ocupados, pela migration 003 (AC-030.1 e SUP-096).
   > Ver `.spec/features/processamento-upload/spec.md`.
 
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > O registro de sessão passa a ter a indicação de encerramento por servidor
+  > indisponível, "sim" ou "não", por migration nova, com as sessões antigas
+  > lidas como "não" (AC-036.1 e AC-036.2).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
+
   AC-008.2 — Dado os cruzamentos detectados numa sessão, quando eles são
   persistidos, então cada evento fica ligado ao id daquela sessão e guarda
   timestamp, categoria, sentido, id de rastreio e confiança.
@@ -89,6 +95,11 @@ Critérios de aceite:
   > A listagem passa a mostrar a origem de cada sessão, e o período de uma
   > sessão de upload é o horário do processamento (AC-030.2 e AC-030.3).
   > Ver `.spec/features/processamento-upload/spec.md`.
+
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > A sessão encerrada por servidor indisponível passa a aparecer no histórico
+  > com essa marca (AC-036.4).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
 ## Fora de escopo
 
