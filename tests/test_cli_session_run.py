@@ -6,7 +6,8 @@ Critérios cobertos, de `.spec/features/interface-sessao/spec.md`:
   que a interface web seja iniciada;
 - AC-013.1 e AC-013.2 — a segunda sessão é recusada sem tocar a sessão em curso, e
   a trava órfã é ignorada;
-- AC-012.5 — Ctrl+C no processamento cancela a contagem e mantém os vídeos.
+- AC-012.5 — Ctrl+C no processamento cancela a contagem e mantém os vídeos;
+- AC-012.7 — a sessão cancelada na captura pela interface sai com código 0.
 
 E, de `captura-clipes`, AC-003.6: Ctrl+C na captura segue para o processamento.
 
@@ -27,6 +28,7 @@ import auto_counter.pipeline as pacote_pipeline
 from auto_counter.cli import app
 from auto_counter.pipeline.lock import NOME_DA_TRAVA
 from auto_counter.pipeline.state import NOME_DO_ESTADO
+from auto_counter.pipeline.stop import pedir_parada
 from tests.test_capture_session import (  # noqa: F401
     LIXO,
     RelogioFalso,
@@ -44,6 +46,7 @@ from tests.test_cli_process import (  # noqa: F401  (fixtures usadas por nome)
     videos,
 )
 from tests.test_cli_session import (  # noqa: F401  (fixtures usadas por nome)
+    DormirFalso,
     DormirQueInterrompe,
     ambiente,
     liga_o_servidor,
@@ -236,3 +239,36 @@ def test_session_run_libera_a_trava_mesmo_quando_falha(
     assert not (data_dir / NOME_DA_TRAVA).exists()
     estado = json.loads((data_dir / NOME_DO_ESTADO).read_text(encoding="utf-8"))
     assert estado["fase"] == "FALHOU"
+
+
+class DormirQueCriaOPedido(DormirFalso):
+    """O clique em "Parar antecipadamente": grava o arquivo de pedido no instante."""
+
+    def __init__(self, relogio, segundo: float, data_dir) -> None:
+        super().__init__(relogio)
+        self.segundo = segundo
+        self._data_dir = data_dir
+
+    def __call__(self, segundos: float) -> None:
+        super().__call__(segundos)
+        if self.relogio.decorrido() >= self.segundo:
+            pedir_parada(self._data_dir)
+
+
+def test_AC_012_7_session_run_cancelada_na_captura_sai_com_codigo_zero(
+    runner, registro, data_dir, modelo, detector, monkeypatch, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, 5)
+    dormir = DormirQueCriaOPedido(relogio, 80.0, data_dir)
+    liga_o_servidor(monkeypatch, servidor, relogio, dormir)
+
+    resultado = roda(runner, registro, 5)
+
+    assert resultado.exit_code == 0, resultado.output
+    assert "Sessão cancelada pelo usuário" in resultado.output
+    assert "Traceback" not in resultado.output
+    assert detector.chamadas == 0
+    assert list(data_dir.glob("*.xlsx")) == []
+    assert videos(dir_da_sessao(data_dir)) == []
+    assert not (data_dir / NOME_DA_TRAVA).exists()

@@ -529,3 +529,35 @@ def test_AC_028_2_process_do_upload_pega_a_trava(
     assert detector.chamadas == 0
     assert len(list(upload_cancelado.glob("video-*"))) == 2
     assert not (upload_cancelado / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+
+
+def test_AC_012_7_session_process_recusa_sessao_cancelada_na_captura(
+    runner, registro, data_dir, modelo, detector
+):
+    """A sessão marcada como cancelada não tem o que processar, e nada é gravado."""
+    from auto_counter.storage.sessions import abrir_sessao, marcar_sessao_cancelada
+
+    dir_sessao = monta_sessao(data_dir)
+    with conectar(data_dir) as conexao:
+        abrir_sessao(
+            conexao,
+            id_sessao=ID_SESSAO,
+            id_camera=ID_CAMERA,
+            criada_em=PRIMEIRO_LAST_MODIFIED,
+            duracao_pedida=2,
+            sentido_a="Icaraí",
+            sentido_b="Centro",
+        )
+        marcar_sessao_cancelada(conexao, ID_SESSAO)
+
+    resultado = processa(runner, registro)
+
+    assert resultado.exit_code == 1
+    assert "cancelada pelo usuário" in resultado.output
+    assert ID_SESSAO in resultado.output
+    assert detector.chamadas == 0
+    assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+    with conectar(data_dir) as conexao:
+        assert contar_eventos(conexao, ID_SESSAO) == 0
+        assert ler_agregados(conexao, ID_SESSAO) == ()
+    assert list(data_dir.glob("*.xlsx")) == []

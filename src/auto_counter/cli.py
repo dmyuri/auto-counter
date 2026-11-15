@@ -624,7 +624,8 @@ def executar_sessao_completa(
             typer.echo(aviso)
         return
 
-    if estado.fase is Fase.PROCESSAMENTO_CANCELADO:
+    if estado.fase in (Fase.PROCESSAMENTO_CANCELADO, Fase.SESSAO_CANCELADA):
+        # Os dois são pedidos do usuário (AC-012.5, AC-012.7): saem com código 0.
         typer.echo(estado.mensagem)
         return
 
@@ -869,6 +870,9 @@ def processar_sessao_capturada(
     descartados, a menos que o manifest traga `manter_videos` (AC-003.5, D-5).
     Processamento que falha não apaga nada.
 
+    A sessão cancelada pelo usuário na captura (AC-012.7) é recusada: os clipes
+    dela foram apagados no cancelamento.
+
     Numa sessão de upload (`upload.json`, AC-029.3), todos os vídeos são
     contados desde o primeiro, com os padrões de processamento (por isso
     `--threshold` e `--sample-rate` são recusados), o resultado é gravado como o
@@ -907,11 +911,31 @@ def processar_sessao_capturada(
 
     try:
         with _trava(data_dir, "process", escolhida):
+            _recusar_sessao_cancelada(data_dir, id_sessao)
             _processar_e_persistir(
                 config, data_dir, dir_sessao, manifest.manter_videos, escolhida
             )
     except OutraSessaoEmAndamentoError as falha:
         raise _erro(str(falha)) from falha
+
+
+def _recusar_sessao_cancelada(data_dir: Path, id_sessao: str) -> None:
+    """AC-012.7, SUP-110: sessão cancelada na captura não tem o que processar.
+
+    Os clipes foram apagados no cancelamento. Banco que não abre, ou sem a
+    sessão, segue o caminho de sempre: sem a marca não há como saber, e as
+    etapas seguintes falham pelos próprios motivos.
+    """
+    try:
+        with conectar_ao_banco(data_dir) as conexao:
+            gravada = ler_sessao(conexao, id_sessao)
+    except Exception:  # noqa: BLE001
+        return
+    if gravada is not None and gravada.cancelada_pelo_usuario:
+        raise _erro(
+            f"a sessão {id_sessao} foi cancelada pelo usuário na captura e não "
+            "tem vídeos para processar"
+        )
 
 
 def _processar_upload_gravado(
