@@ -22,6 +22,7 @@ MIGRATIONS: dict[int, str] = {
     2: "002_nome_camera.sql",
     3: "003_upload.sql",
     4: "004_sessao_cancelada.sql",
+    5: "005_servidor_indisponivel.sql",
 }
 """Versão → nome do arquivo em `storage/migrations/`. Só cresce no fim."""
 

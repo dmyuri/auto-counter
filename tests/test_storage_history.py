@@ -38,6 +38,7 @@ def _abrir_e_fechar(
     duracao_real: int = 1,
     status: StatusDaSessao = StatusDaSessao.COMPLETA,
     minutos_perdidos: tuple[int, ...] = (),
+    encerrada_por_servidor_indisponivel: bool = False,
 ) -> None:
     abrir_sessao(
         conexao,
@@ -57,6 +58,7 @@ def _abrir_e_fechar(
         encerrada_pelo_usuario=False,
         status=status,
         minutos_perdidos=minutos_perdidos,
+        encerrada_por_servidor_indisponivel=encerrada_por_servidor_indisponivel,
     )
 
 
@@ -246,3 +248,22 @@ def test_AC_009_2_sessao_cancelada_aparece_no_historico_com_a_marca(tmp_path):
     assert historico["cancelada"].total_de_eventos == 0
     assert historico["sem-trafego"].cancelada_pelo_usuario is False
     assert historico["sem-trafego"].total_de_eventos == 0
+
+
+def test_AC_036_4_listar_sessoes_traz_a_marca(tmp_path):
+    base = datetime(2026, 1, 1, 8, 0, 0, tzinfo=timezone.utc)
+    with conectar(tmp_path) as conexao:
+        _abrir_e_fechar(conexao, "normal", criada_em=base)
+        _abrir_e_fechar(
+            conexao,
+            "sem-servidor",
+            criada_em=base + timedelta(minutes=10),
+            status=StatusDaSessao.INVALIDA,
+            minutos_perdidos=(1,),
+            encerrada_por_servidor_indisponivel=True,
+        )
+
+        historico = {item.id_sessao: item for item in listar_sessoes(conexao)}
+
+    assert historico["sem-servidor"].encerrada_por_servidor_indisponivel is True
+    assert historico["normal"].encerrada_por_servidor_indisponivel is False

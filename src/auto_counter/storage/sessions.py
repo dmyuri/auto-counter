@@ -193,9 +193,12 @@ def fechar_captura(
     encerrada_pelo_usuario: bool,
     status: StatusDaSessao,
     minutos_perdidos: list[int] | tuple[int, ...],
+    encerrada_por_servidor_indisponivel: bool = False,
     comitar: bool = True,
 ) -> None:
     """Momento 2 de D-1: grava o desfecho da captura.
+
+    `encerrada_por_servidor_indisponivel` é a marca de AC-036.1.
 
     `status` é um `StatusDaSessao` de `capture.status`, gravado como
     `.value` — nenhuma tabela de tradução própria. `minutos_perdidos` é a
@@ -217,7 +220,8 @@ def fechar_captura(
             encerrada_pelo_usuario = ?,
             status = ?,
             minutos_perdidos_quantidade = ?,
-            minutos_perdidos = ?
+            minutos_perdidos = ?,
+            encerrada_por_servidor_indisponivel = ?
         WHERE id_sessao = ?
         """,
         (
@@ -228,6 +232,7 @@ def fechar_captura(
             status.value,
             len(perdidos),
             json.dumps(list(perdidos)),
+            int(encerrada_por_servidor_indisponivel),
             id_sessao,
         ),
     )
@@ -328,6 +333,9 @@ def ler_sessao(conexao: sqlite3.Connection, id_sessao: str) -> SessaoGravada | N
         sentido_b=linha["sentido_b"],
         origem=OrigemDaSessao(linha["origem"]),
         cancelada_pelo_usuario=bool(linha["cancelada_pelo_usuario"]),
+        encerrada_por_servidor_indisponivel=bool(
+            linha["encerrada_por_servidor_indisponivel"]
+        ),
         videos=tuple(
             VideoGravado(
                 posicao=video["posicao"],
@@ -373,6 +381,8 @@ def listar_sessoes(
             s.status AS status,
             s.origem AS origem,
             s.cancelada_pelo_usuario AS cancelada_pelo_usuario,
+            s.encerrada_por_servidor_indisponivel
+                AS encerrada_por_servidor_indisponivel,
             COUNT(e.id_sessao) AS total_de_eventos
         FROM sessao s
         LEFT JOIN evento e ON e.id_sessao = s.id_sessao
@@ -399,6 +409,9 @@ def listar_sessoes(
             total_de_eventos=linha["total_de_eventos"],
             origem=OrigemDaSessao(linha["origem"]),
             cancelada_pelo_usuario=bool(linha["cancelada_pelo_usuario"]),
+            encerrada_por_servidor_indisponivel=bool(
+                linha["encerrada_por_servidor_indisponivel"]
+            ),
         )
         for linha in linhas
     )

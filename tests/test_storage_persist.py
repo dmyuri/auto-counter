@@ -319,3 +319,33 @@ def test_eventos_ausentes_e_erro_citando_o_caminho_e_pedindo_processamento(tmp_p
     with conectar(tmp_path) as conexao:
         with pytest.raises(EventosAusentesError, match="eventos.json"):
             persistir_sessao(conexao, dir_sessao, camera=camera())
+
+
+def test_AC_036_2_persistir_sessao_le_a_marca_do_manifest(tmp_path):
+    """A marca do manifest chega ao banco pelo processamento, sem passar pelo
+    gancho da captura (é o que `session process` faz depois de `session capture`)."""
+    dir_sessao, manifest, _registro = _criar_sessao_completa(
+        tmp_path, duracao_pedida=2
+    )
+    manifest.fechar(
+        classificar(2, []),
+        duracao_real=2,
+        encerrada_por_servidor_indisponivel=True,
+        servidor_indisponivel_desde=LAST_MODIFIED_BASE,
+    )
+
+    with conectar(tmp_path) as conexao:
+        persistir_sessao(conexao, dir_sessao, camera=camera())
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.encerrada_por_servidor_indisponivel is True
+
+
+def test_AC_036_1_persistir_sessao_sem_a_marca_grava_nao(tmp_path):
+    dir_sessao, _manifest, _registro = _criar_sessao_completa(tmp_path)
+
+    with conectar(tmp_path) as conexao:
+        persistir_sessao(conexao, dir_sessao, camera=camera())
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.encerrada_por_servidor_indisponivel is False

@@ -107,6 +107,9 @@ class SessaoGravada:
     cancelada_pelo_usuario: bool = False
     """AC-008.6: captura cancelada pelo usuário na interface. Campo próprio, e
     não um quarto status (SUP-109)."""
+    encerrada_por_servidor_indisponivel: bool = False
+    """AC-036.1: captura encerrada porque o servidor ficou indisponível. Sessão
+    gravada antes da migration 005 é lida como `False`."""
 
 
 @dataclass(frozen=True)
@@ -125,6 +128,7 @@ class SessaoNoHistorico:
     total_de_eventos: int
     origem: OrigemDaSessao = OrigemDaSessao.CAMERA
     cancelada_pelo_usuario: bool = False
+    encerrada_por_servidor_indisponivel: bool = False
 
 
 @dataclass(frozen=True)

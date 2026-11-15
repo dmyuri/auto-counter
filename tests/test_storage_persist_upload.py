@@ -210,3 +210,11 @@ def test_sem_eventos_json_a_sessao_de_upload_nao_e_persistida(tmp_path):
                 conexao, dir_sessao, camera=camera(), inicio=INICIO, fim=FIM
             )
         assert ler_sessao(conexao, ID_SESSAO) is None
+
+
+def test_AC_036_1_sessao_de_upload_grava_a_marca_desligada(tmp_path):
+    dir_sessao = monta(tmp_path)
+
+    _resumo, sessao = persiste(tmp_path, dir_sessao)
+
+    assert sessao.encerrada_por_servidor_indisponivel is False

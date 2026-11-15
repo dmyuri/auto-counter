@@ -77,15 +77,15 @@ def test_aplicar_migrations_duas_vezes_nao_reaplica_nem_duplica_versao(tmp_path)
     assert [linha["versao"] for linha in linhas] == sorted(MIGRATIONS)
 
 
-def test_um_banco_novo_chega_a_versao_4(tmp_path):
+def test_um_banco_novo_chega_a_versao_5(tmp_path):
     with conectar(tmp_path) as conexao:
         versao = conexao.execute("SELECT MAX(versao) AS v FROM schema_version").fetchone()
 
-    assert versao["v"] == 4
-    assert VERSAO_ATUAL == 4
+    assert versao["v"] == 5
+    assert VERSAO_ATUAL == 5
 
 
-def test_banco_na_versao_1_sobe_para_a_4_sem_perder_as_sessoes_gravadas(
+def test_banco_na_versao_1_sobe_para_a_5_sem_perder_as_sessoes_gravadas(
     tmp_path, monkeypatch
 ):
     monkeypatch.setattr(schema, "MIGRATIONS", {1: MIGRATIONS[1]})
@@ -103,7 +103,7 @@ def test_banco_na_versao_1_sobe_para_a_4_sem_perder_as_sessoes_gravadas(
             "SELECT id_camera, nome_camera FROM sessao WHERE id_sessao = 'antiga'"
         ).fetchone()
 
-    assert versoes == [1, 2, 3, 4]
+    assert versoes == [1, 2, 3, 4, 5]
     assert sessao["id_camera"] == ID_CAMERA
     assert sessao["nome_camera"] is None
 
@@ -246,7 +246,7 @@ def test_SUP_096_migration_003_aplica_sobre_banco_na_versao_2(tmp_path, monkeypa
             for linha in conexao.execute("PRAGMA table_info(video_da_sessao)")
         }
 
-    assert versoes == [1, 2, 3, 4]
+    assert versoes == [1, 2, 3, 4, 5]
     assert "origem" in colunas_da_sessao
     assert {"video", "deslocamento"} <= colunas_do_evento
     assert colunas_do_video == {
@@ -309,6 +309,35 @@ def test_SUP_109_migration_004_acrescenta_a_marca_com_padrao_zero(tmp_path, monk
         }
         sessao = ler_sessao(conexao, "antiga")
 
-    assert versoes == [1, 2, 3, 4]
+    assert versoes == [1, 2, 3, 4, 5]
     assert "cancelada_pelo_usuario" in colunas
     assert sessao.cancelada_pelo_usuario is False
+
+
+# --- servidor-indisponivel: migration 005 (AC-036.1, D-8) ---
+
+
+def test_AC_036_1_migration_005_acrescenta_a_marca_com_padrao_zero(tmp_path, monkeypatch):
+    monkeypatch.setattr(
+        schema,
+        "MIGRATIONS",
+        {1: MIGRATIONS[1], 2: MIGRATIONS[2], 3: MIGRATIONS[3], 4: MIGRATIONS[4]},
+    )
+    with conectar(tmp_path) as conexao:
+        _inserir_sessao(conexao, "antiga")
+        conexao.commit()
+    monkeypatch.undo()
+
+    with conectar(tmp_path) as conexao:
+        versoes = [
+            linha["versao"]
+            for linha in conexao.execute("SELECT versao FROM schema_version")
+        ]
+        colunas = {
+            linha["name"] for linha in conexao.execute("PRAGMA table_info(sessao)")
+        }
+        sessao = ler_sessao(conexao, "antiga")
+
+    assert versoes == [1, 2, 3, 4, 5]
+    assert "encerrada_por_servidor_indisponivel" in colunas
+    assert sessao.encerrada_por_servidor_indisponivel is False
