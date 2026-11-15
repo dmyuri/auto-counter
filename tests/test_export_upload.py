@@ -169,3 +169,10 @@ def test_AC_030_1_sessao_ao_vivo_traz_origem_camera_na_aba_sessao(tmp_path):
     assert "_upload" not in caminho.name
     # A sessão ao vivo não ganha o bloco de vídeos.
     assert ("vídeo", "nome", "duração (MM:SS)", "minutos") not in linhas(aba)
+
+
+def test_AC_036_3_sessao_de_upload_traz_a_linha_com_nao(tmp_path):
+    aba = load_workbook(exporta(tmp_path))["Sessao"]
+    campos = {linha[0]: linha[1] for linha in linhas(aba)}
+
+    assert campos["encerrada por servidor indisponível"] == "NÃO"

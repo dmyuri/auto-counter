@@ -129,3 +129,28 @@ def test_AC_032_6_aba_de_metadados_registra_id_e_nome_da_000012(tmp_path):
 
     assert campos["id da câmera"] == "000012"
     assert campos["nome da câmera"] == "Praia x Mariz Barros"
+
+
+def test_AC_036_3_aba_sessao_traz_a_linha_com_sim(tmp_path):
+    aba = _aba(
+        tmp_path,
+        duracao_pedida=15,
+        status=StatusDaSessao.INVALIDA,
+        minutos_perdidos=tuple(range(4, 16)),
+        encerrada_por_servidor_indisponivel=True,
+    )
+
+    assert _campos(aba)["encerrada por servidor indisponível"] == "SIM"
+    # Logo depois de "encerrada pelo usuário", na mesma grafia (D-13).
+    nomes = [linha[0].value for linha in aba.iter_rows()]
+    assert (
+        nomes.index("encerrada por servidor indisponível")
+        == nomes.index("encerrada pelo usuário") + 1
+    )
+
+
+def test_AC_036_3_aba_sessao_traz_a_linha_com_nao(tmp_path):
+    campos = _campos(_aba(tmp_path))
+
+    assert campos["encerrada por servidor indisponível"] == "NÃO"
+    assert campos["encerrada pelo usuário"] == "NÃO"
