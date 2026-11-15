@@ -350,3 +350,71 @@ def test_AC_012_1_o_minuto_abandonado_por_parada_nao_chega_ao_gancho(
 
     assert resultado.duracao_real == 3
     assert chamadas == [(1, True), (2, True), (3, True)]
+
+
+def test_AC_012_7_parada_durante_a_espera_entre_checagens_tem_efeito_em_menos_de_um_segundo(
+    camera, tmp_path, clipes_legiveis
+):
+    """A espera de 10 s entre checagens (SUP-008) não segura o pedido de parada.
+
+    O minuto 7 é aceito em t=360 e a próxima checagem seria em t=370. A parada
+    chega em t=365, no meio dessa espera: a captura tem de parar ali, e não só
+    na checagem seguinte.
+    """
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
+    parada = ParadaFalsa(relogio, segundo=365.0)
+
+    resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
+
+    assert resultado.duracao_real == 7
+    assert relogio.decorrido() < 366.0
+
+
+def test_AC_012_7_sem_parada_a_espera_entre_checagens_continua_de_dez_segundos(
+    camera, tmp_path, clipes_legiveis
+):
+    # Sem quem possa pedir a parada, a espera não é fatiada: SUP-008 intacta.
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=2)
+    dormir = DormirFalso(relogio)
+
+    capturar(
+        camera,
+        2,
+        data_dir=tmp_path / "data",
+        cliente=servidor.cliente(),
+        agora=relogio.agora,
+        dormir=dormir,
+    )
+
+    assert 10.0 in dormir.esperas
+    assert all(espera >= 10.0 for espera in dormir.esperas[:-1])
+
+
+class ParadaNoSegundoDownload:
+    """Pedida assim que o servidor recebe o GET do clipe do minuto 2."""
+
+    def __init__(self, servidor: ServidorFalso):
+        self.servidor = servidor
+
+    def foi_pedida(self) -> bool:
+        return self.servidor.metodos().count("GET") >= 2
+
+
+def test_AC_012_7_parada_durante_o_download_abandona_o_minuto_sem_contar_perda(
+    camera, tmp_path, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_de_um_clipe_por_minuto(relogio, clipes_legiveis, minutos=15)
+    parada = ParadaNoSegundoDownload(servidor)
+
+    resultado = executa(camera, tmp_path, servidor, relogio, 15, parada=parada)
+
+    assert [item.minuto for item in resultado.minutos_capturados] == [1]
+    assert resultado.minutos_perdidos == ()
+    assert resultado.duracao_real == 1
+    # O arquivo do minuto interrompido não fica no diretório da sessão.
+    assert sorted(p.name for p in resultado.dir_sessao.glob("*.mp4")) == [
+        resultado.minutos_capturados[0].arquivo
+    ]

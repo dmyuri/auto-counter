@@ -24,6 +24,8 @@ from pathlib import Path
 
 import httpx
 
+from auto_counter.capture.espera import ComParada, esperar
+
 TENTATIVAS_MAXIMAS = 3
 """Quantas tentativas de download um mesmo clipe recebe (AC-004.1)."""
 
@@ -52,6 +54,15 @@ class DownloadFalhouError(Exception):
     """
 
 
+class DownloadInterrompido(Exception):
+    """A parada foi pedida durante o download (AC-012.7 de `interface-sessao`).
+
+    Tipo próprio, e não `DownloadFalhouError`, porque o desfecho é outro: o
+    minuto não foi perdido, ele deixou de existir, como na parada entre
+    checagens. O arquivo parcial já foi apagado quando ela sobe.
+    """
+
+
 def _descarta_parcial(destino: Path) -> None:
     """Apaga o arquivo da tentativa que falhou, se ele chegou a existir.
 
@@ -64,8 +75,14 @@ def _descarta_parcial(destino: Path) -> None:
         pass
 
 
-def _uma_tentativa(cliente: httpx.Client, url: str, destino: Path) -> None:
-    """GET único, gravando o corpo direto no destino. Erro sobe para o laço."""
+def _uma_tentativa(
+    cliente: httpx.Client, url: str, destino: Path, parada: ComParada | None
+) -> None:
+    """GET único, gravando o corpo direto no destino. Erro sobe para o laço.
+
+    A parada é olhada a cada pedaço recebido: um clipe de ~32 MB numa conexão
+    lenta não pode segurar o pedido do usuário até o fim do download.
+    """
     try:
         with cliente.stream(
             "GET", url, follow_redirects=True, timeout=TEMPO_LIMITE_POR_TENTATIVA
@@ -73,6 +90,10 @@ def _uma_tentativa(cliente: httpx.Client, url: str, destino: Path) -> None:
             resposta.raise_for_status()
             with destino.open("wb") as arquivo:
                 for pedaco in resposta.iter_bytes():
+                    if parada is not None and parada.foi_pedida():
+                        raise DownloadInterrompido(
+                            f"a parada foi pedida durante o download de {url}"
+                        )
                     arquivo.write(pedaco)
     except BaseException:
         _descarta_parcial(destino)
@@ -87,6 +108,7 @@ def baixar(
     prazo: datetime,
     dormir: Callable[[float], None],
     agora: Callable[[], datetime],
+    parada: ComParada | None = None,
 ) -> Path:
     """Baixa o clipe para `destino`, repetindo até 3 vezes dentro da janela.
 
@@ -103,6 +125,11 @@ def baixar(
     Devolve o caminho gravado. Esgotadas as tentativas, ou vencido o prazo,
     levanta `DownloadFalhouError` dizendo o que falhou e quantas tentativas
     houve. Nenhuma exceção de rede ou de disco escapa crua (`CLAUDE.md`).
+
+    `parada` é o pedido de encerramento da sessão. Ele é olhado durante a
+    espera entre tentativas e a cada pedaço do download; pedido, levanta
+    `DownloadInterrompido`, sem arquivo parcial no destino. `None` (o padrão)
+    não interrompe nada.
     """
     destino = Path(destino)
     ultima_falha = "nenhuma tentativa chegou a acontecer"
@@ -126,11 +153,15 @@ def baixar(
                     f"{tentativa} de baixar {url}; houve {tentativas_feitas} "
                     f"tentativa(s), e a última falhou assim: {ultima_falha}"
                 )
-            dormir(espera)
+            if esperar(espera, dormir=dormir, parada=parada):
+                raise DownloadInterrompido(
+                    f"a parada foi pedida antes da tentativa {tentativa} de "
+                    f"baixar {url}"
+                )
 
         tentativas_feitas = tentativa
         try:
-            _uma_tentativa(cliente, url, destino)
+            _uma_tentativa(cliente, url, destino, parada)
         except httpx.HTTPStatusError as erro:
             ultima_falha = f"o servidor respondeu {erro.response.status_code}"
         except httpx.HTTPError as erro:

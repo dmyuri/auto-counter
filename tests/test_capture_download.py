@@ -32,6 +32,7 @@ from auto_counter.capture.download import (
     TEMPO_LIMITE_POR_TENTATIVA,
     TENTATIVAS_MAXIMAS,
     DownloadFalhouError,
+    DownloadInterrompido,
     baixar,
 )
 
@@ -273,3 +274,75 @@ def test_AC_004_1_arquivo_parcial_de_tentativa_que_falhou_e_apagado_antes_da_pro
     )
 
     assert destino.read_bytes() == CONTEUDO_DO_CLIPE
+
+
+class ParadaFalsa:
+    """Pedido de parada dirigido pelo relógio falso, a partir de `segundo`."""
+
+    def __init__(self, relogio: RelogioFalso, segundo: float):
+        self.relogio = relogio
+        self.segundo = segundo
+
+    def foi_pedida(self) -> bool:
+        return self.relogio.decorrido() >= self.segundo
+
+
+class ParadaDepoisDoPrimeiroPedaco:
+    """Pedida assim que o primeiro pedaço do corpo do clipe é entregue."""
+
+    def __init__(self):
+        self.pedida = False
+
+    def corpo(self):
+        yield CONTEUDO_DO_CLIPE[:10]
+        self.pedida = True
+        yield CONTEUDO_DO_CLIPE[10:]
+
+    def foi_pedida(self) -> bool:
+        return self.pedida
+
+
+def test_AC_012_7_parada_entre_pedacos_do_download_interrompe_e_apaga_o_parcial(
+    tmp_path,
+):
+    relogio = RelogioFalso()
+    dormir = DormirFalso(relogio)
+    parada = ParadaDepoisDoPrimeiroPedaco()
+    destino = tmp_path / "minuto-01.mp4"
+    cliente = cliente_que_responde(relogio, httpx.Response(200, content=parada.corpo()))
+
+    with pytest.raises(DownloadInterrompido):
+        baixar(
+            cliente,
+            URL_DO_CLIPE,
+            destino,
+            prazo=prazo_da_janela(),
+            dormir=dormir,
+            agora=relogio.agora,
+            parada=parada,
+        )
+
+    assert not destino.exists()
+    assert len(cliente.pedidos) == 1
+
+
+def test_AC_012_7_parada_durante_a_espera_entre_tentativas_nao_faz_a_proxima(tmp_path):
+    # A primeira tentativa falha e gasta 20 s; a parada chega em t=21, no meio
+    # da espera de 3 s antes da segunda.
+    relogio = RelogioFalso()
+    dormir = DormirFalso(relogio)
+    cliente = cliente_que_responde(relogio, httpx.ConnectError("sem rede"))
+
+    with pytest.raises(DownloadInterrompido):
+        baixar(
+            cliente,
+            URL_DO_CLIPE,
+            tmp_path / "minuto-01.mp4",
+            prazo=prazo_da_janela(),
+            dormir=dormir,
+            agora=relogio.agora,
+            parada=ParadaFalsa(relogio, segundo=21.0),
+        )
+
+    assert len(cliente.pedidos) == 1
+    assert relogio.decorrido() < 22.0
