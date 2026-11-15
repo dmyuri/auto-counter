@@ -276,13 +276,38 @@ class ParadaNaConsulta:
         return self.consultas >= self._n
 
 
+class ParadaComOVideoEmCurso:
+    """Pedida assim que o estado gravado mostra o vídeo `posicao` em análise.
+
+    Lida do estado, e não contada por consulta: a parada é consultada a cada
+    frame (SUP-108), então o número da consulta não diz em que vídeo se está.
+    """
+
+    def __init__(self, data_dir, posicao: int) -> None:
+        self._data_dir = data_dir
+        self._posicao = posicao
+
+    def foi_pedida(self) -> bool:
+        estado = ler_estado(self._data_dir)
+        video = estado.videos[self._posicao - 1]
+        return video.situacao is SituacaoDoVideo.PROCESSANDO
+
+
+class ParadaDepoisDoMinutoIniciado:
+    """Pedida assim que o estado gravado mostra um minuto já em análise."""
+
+    def __init__(self, data_dir) -> None:
+        self._data_dir = data_dir
+
+    def foi_pedida(self) -> bool:
+        return ler_estado(self._data_dir).minuto_em_analise_desde is not None
+
+
 def test_AC_029_2_cancelada_mostra_interrompido_concluido_e_fila(
     data_dir, modelo, rastreador_duble
 ):
     arquivos, nomes = videos_em_envios(data_dir, 3)
-    # Consultas: antes do vídeo 1 (1) e do seu minuto (2); antes do vídeo 2 (3)
-    # e do seu minuto (4). A quarta pede a parada com o vídeo 2 em curso.
-    parada = ParadaNaConsulta(4)
+    parada = ParadaComOVideoEmCurso(data_dir, posicao=2)
 
     estado = executa(data_dir, arquivos, nomes, criar_parada=lambda: parada)
 
@@ -394,3 +419,17 @@ def test_falha_inesperada_marca_interrompido_e_falhou(
         SituacaoDoVideo.INTERROMPIDO,
         SituacaoDoVideo.FILA,
     )
+
+
+def test_AC_029_1_parar_durante_o_ultimo_minuto_cancela_em_vez_de_concluir(
+    data_dir, modelo, rastreador_duble
+):
+    # Um vídeo só, de um minuto: o pedido chega com esse minuto em análise.
+    arquivos, nomes = videos_em_envios(data_dir, 1)
+    parada = ParadaDepoisDoMinutoIniciado(data_dir)
+
+    estado = executa(data_dir, arquivos, nomes, criar_parada=lambda: parada)
+
+    assert estado.fase is Fase.PROCESSAMENTO_CANCELADO
+    assert not list(data_dir.glob("*.xlsx"))
+    assert not (dir_da_sessao(data_dir) / "eventos.json").exists()

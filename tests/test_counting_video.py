@@ -39,6 +39,7 @@ from tests.test_counting_session import (
     ByteTrackDuble,
     DetectorDuble,
     ParadaDuble,
+    ParadaPedidaDepoisDeNChamadas,
     camera,
     roteiro_do_clipe,
 )
@@ -385,3 +386,43 @@ def test_fim_normal_dentro_do_ultimo_minuto_nao_e_falha(tmp_path):
     assert resultado.falhou is False
     assert resultado.minutos_com_dado == (1, 2)
     assert resultado.minutos_sem_dado == ()
+
+
+def test_AC_029_1_parada_no_meio_de_um_minuto_para_sem_terminar_o_minuto(tmp_path):
+    """O pedido chega no 2º frame do minuto 1, com o minuto 2 ainda por vir.
+
+    A parada é consultada a cada frame amostrado, e não só na virada do minuto
+    (SUP-108, corrigida em 2026-11-15): o minuto 1 não chega a ser resolvido.
+    """
+    caminho = escreve_video(tmp_path / "v.mp4", fps=10, quadros=700)
+    detector = DetectorDuble([])
+    registro = Registro()
+
+    with pytest.raises(ProcessamentoCancelado) as erro:
+        conta(
+            caminho,
+            detector=detector,
+            minutos=2,
+            posicao=2,
+            parada=ParadaPedidaDepoisDeNChamadas(detector, chamadas=2),
+            **registro.ganchos(),
+        )
+
+    assert erro.value.video == 2
+    assert detector.chamadas == 2
+    assert registro.chamadas == [("iniciar", 1)]
+
+
+def test_AC_029_1_parada_durante_o_ultimo_minuto_do_video_cancela(tmp_path):
+    """Sem virada de minuto depois do pedido, só a consulta por frame o vê."""
+    caminho = escreve_video(tmp_path / "v.mp4", fps=10, quadros=50)
+    detector = DetectorDuble([])
+
+    with pytest.raises(ProcessamentoCancelado):
+        conta(
+            caminho,
+            detector=detector,
+            parada=ParadaPedidaDepoisDeNChamadas(detector, chamadas=1),
+        )
+
+    assert detector.chamadas == 1

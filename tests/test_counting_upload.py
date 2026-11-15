@@ -261,3 +261,31 @@ def test_ganchos_de_video_na_ordem(tmp_path):
         ("resolver", 2, True),
         ("terminar_video", 2, False),
     ]
+
+
+def test_AC_029_1_parada_durante_o_ultimo_minuto_do_ultimo_video_cancela_sem_eventos_json(
+    tmp_path,
+):
+    """O pedido chega com o minuto do último vídeo já iniciado.
+
+    Depois dele não há outro vídeo nem outra virada de minuto: sem a consulta
+    por frame, a sessão terminaria com o `eventos.json` gravado.
+    """
+    dir_sessao = monta_sessao(tmp_path, [(50, True), (50, True)])
+    parada = ParadaDuble()
+    registro = Registro()
+    ganchos = registro.ganchos()
+    iniciar = ganchos["ao_iniciar_minuto"]
+
+    def iniciar_e_pedir(minuto):
+        iniciar(minuto)
+        if minuto == 2:
+            parada.pedida = True
+
+    ganchos["ao_iniciar_minuto"] = iniciar_e_pedir
+
+    with pytest.raises(ProcessamentoCancelado):
+        conta(dir_sessao, parada=parada, **ganchos)
+
+    assert not (dir_sessao / NOME_DO_ARQUIVO_DE_EVENTOS).exists()
+    assert ("terminar_video", 2, False) not in registro.chamadas

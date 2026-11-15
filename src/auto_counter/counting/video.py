@@ -15,7 +15,8 @@ nunca uma hora do dia (SUP-100).
 A falha de leitura (D-4) vale por minuto: o minuto em que a leitura parou e os
 seguintes ficam sem dado, e os anteriores mantêm seus eventos (AC-028.9). Os
 ganchos por minuto (D-12) deixam o laço da sessão atualizar o estado e consultar
-a parada.
+a parada. A parada é consultada também a cada frame amostrado (SUP-108 de
+`interface-sessao`), para o pedido não esperar o fim do minuto em análise.
 """
 
 from collections.abc import Callable
@@ -85,6 +86,10 @@ def processar_video(
     motivo dos minutos sem dado. `minuto_inicial` e `minutos` são a faixa do
     vídeo na sessão (D-3), e `inicio_da_linha_do_tempo` é o T0 da sessão
     (D-5). Os minutos dos ganchos são os da sessão.
+
+    `parada` é consultada a cada frame amostrado e, de novo, na virada do minuto,
+    depois de resolver o anterior (D-12). Pedida, levanta
+    `ProcessamentoDeVideoCancelado` sem terminar o minuto em análise.
     """
     ultimo_minuto = minuto_inicial + minutos - 1
     inicio_do_video = inicio_da_linha_do_tempo + timedelta(
@@ -110,6 +115,11 @@ def processar_video(
     iterador = iter(amostragem)
     try:
         for amostra in iterador:
+            # SUP-108: a parada é consultada a cada frame amostrado, e não só
+            # na virada do minuto. Sem isso, o pedido feito durante o último
+            # minuto do último vídeo nunca seria visto (AC-029.1, AC-012.5).
+            if parada is not None and parada.foi_pedida():
+                raise ProcessamentoDeVideoCancelado(posicao)
             if avaliador is None:
                 fps = amostragem.fps
                 if fps is None or fps <= 0:

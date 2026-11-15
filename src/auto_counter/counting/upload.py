@@ -60,8 +60,8 @@ def processar_sessao_de_upload(
     """Processa todos os vídeos da sessão e grava o `eventos.json`.
 
     `inicio_do_processamento` é o T0 da sessão (D-5), a origem da linha do tempo
-    dos eventos. `parada` é consultada antes de cada vídeo e antes de cada minuto
-    dentro dele (D-12). `ao_terminar_video(posicao, falhou)` informa o desfecho
+    dos eventos. `parada` é consultada antes de cada vídeo, antes de cada minuto
+    dentro dele (D-12) e a cada frame amostrado (SUP-108 de `interface-sessao`). `ao_terminar_video(posicao, falhou)` informa o desfecho
     do vídeo.
     """
     dir_sessao = Path(dir_sessao)
