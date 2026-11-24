@@ -221,3 +221,59 @@ def test_falha_de_banco_na_captura_avisa_mas_nao_interrompe_a_sessao(
     assert len(avisos) == 2
     assert all("banco" in aviso for aviso in avisos)
     assert all(resultado.id_sessao in aviso for aviso in avisos)
+
+
+def test_AC_036_1_captura_encerrada_por_servidor_grava_a_marca_no_banco(
+    camera, tmp_path, clipes_legiveis
+):
+    """Sessão sem nenhum minuto capturado: não chega ao processamento, então a
+    marca só pode vir do gancho da captura (AC-033.8)."""
+    from tests.test_capture_session import ServidorComFalhas
+
+    data_dir = tmp_path / "data"
+    relogio = RelogioFalso()
+    servidor = ServidorComFalhas(
+        relogio,
+        [(0.0, "clipe-a")],
+        clipes_legiveis("clipe-a"),
+        indisponivel=[(0.0, 1e9, "conexao")],
+    )
+
+    with conectar(data_dir) as conexao:
+        resultado = capturar(
+            camera,
+            5,
+            data_dir=data_dir,
+            cliente=servidor.cliente(),
+            agora=relogio.agora,
+            dormir=DormirFalso(relogio),
+            persistencia=PersistenciaDaCaptura(conexao, camera=camera),
+        )
+        sessao = ler_sessao(conexao, resultado.id_sessao)
+
+    assert resultado.minutos_capturados == ()
+    assert sessao.encerrada_por_servidor_indisponivel is True
+    assert sessao.status is StatusDaSessao.INVALIDA
+    assert sessao.minutos_perdidos == (1, 2, 3, 4, 5)
+
+
+def test_AC_036_1_captura_normal_grava_a_marca_desligada(
+    camera, tmp_path, clipes_legiveis
+):
+    data_dir = tmp_path / "data"
+    relogio = RelogioFalso()
+    servidor = ServidorFalso(relogio, [(0.0, "clipe-a")], clipes_legiveis("clipe-a"))
+
+    with conectar(data_dir) as conexao:
+        resultado = capturar(
+            camera,
+            1,
+            data_dir=data_dir,
+            cliente=servidor.cliente(),
+            agora=relogio.agora,
+            dormir=DormirFalso(relogio),
+            persistencia=PersistenciaDaCaptura(conexao, camera=camera),
+        )
+        sessao = ler_sessao(conexao, resultado.id_sessao)
+
+    assert sessao.encerrada_por_servidor_indisponivel is False

@@ -185,3 +185,44 @@ def test_AC_018_4_processo_morto_deixa_o_painel_ao_vivo_sem_numeros(data_dir, re
     assert at.metric == []
     assert MENSAGEM_SEM_CONTAGEM in textos(at)
     assert "Tempo" not in textos(at)
+
+
+# --- servidor-indisponivel: nada de aviso durante a sessão (AC-035.5) ---
+
+
+def test_AC_035_5_captura_em_andamento_nao_mostra_servidor_indisponivel(data_dir):
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=15,
+        iniciada_em=INICIO,
+    )
+    a.iniciar()
+    for minuto in (1, 2, 3):
+        a.minuto_da_captura(minuto, True)
+    # Minutos com servidor indisponível, ainda durante a captura.
+    a.minuto_da_captura(4, False)
+    a.minuto_da_captura(5, False)
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+
+    assert not at.exception
+    assert "Minutos perdidos: 4, 5" in textos(at)
+    assert "servidor indisponível" not in textos(at).lower()
+
+
+def test_AC_035_5_processamento_depois_da_queda_nao_mostra_servidor_indisponivel(
+    data_dir, relogio
+):
+    a = sessao_em_processamento(data_dir, a_processar=3, relogio=relogio)
+    # A captura acabou por servidor indisponível, mas a sessão ainda não terminou.
+    a.captura_encerrada_por_servidor(INICIO + timedelta(seconds=132))
+
+    with trava_do_run(data_dir):
+        at = abre_a_interface()
+
+    assert not at.exception
+    assert "servidor indisponível" not in textos(at).lower()

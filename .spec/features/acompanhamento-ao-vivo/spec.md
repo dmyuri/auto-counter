@@ -106,6 +106,11 @@ Critérios de aceite:
   da duração pedida ou por encerramento antecipado (AC-003.6), quando a interface
   é consultada já no processamento, então o tempo exibido continua medido a
   partir de T0, sem voltar a zero.
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > A passagem da captura para o processamento passa a acontecer também pelo
+  > encerramento por servidor indisponível, com o tempo ainda medido a partir de
+  > T0 (AC-033.4 e AC-033.6).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-017.3 — Dado uma sessão em andamento, quando a interface é consultada em dois
   instantes T1 e T2, então a diferença entre os dois tempos exibidos é T2 − T1,

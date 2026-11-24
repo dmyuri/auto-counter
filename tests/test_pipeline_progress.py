@@ -1632,3 +1632,107 @@ def test_AC_025_6_sessao_cancelada_na_captura_nao_traz_clipes(tmp_path):
     assert resultado.clipes == ()
     assert resultado.clipes_ausentes == 0
     assert resultado.titulo_dos_clipes is None
+
+
+# --- servidor-indisponivel: dados do resultado (T-07, D-11) ---
+
+
+def anotador_que_perdeu_o_servidor(data_dir, *, desde_segundos: float = 132.7):
+    """Sessão de 15 min com 1 a 3 capturados e 4 a 15 perdidos, marcada como
+    encerrada por servidor indisponível `desde_segundos` depois de T0."""
+    a = anotador(data_dir, duracao_pedida=15)
+    a.iniciar()
+    for minuto in (1, 2, 3):
+        a.minuto_da_captura(minuto, True)
+    for minuto in range(4, 16):
+        a.minuto_da_captura(minuto, False)
+    a.captura_encerrada_por_servidor(INICIO + timedelta(seconds=desde_segundos))
+    return a
+
+
+def test_AC_035_1_resultado_concluido_traz_a_marca_o_instante_e_os_perdidos(tmp_path):
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(conexao, status=StatusDaSessao.INVALIDA)
+    planilha = tmp_path / "000013_20260907_0800_15min.xlsx"
+    planilha.write_bytes(b"xlsx")
+    a = anotador_que_perdeu_o_servidor(tmp_path)
+    a.terminar(
+        Fase.CONCLUIDA,
+        id_sessao=ID_SESSAO,
+        status="INVALIDA",
+        planilha=str(planilha),
+        mensagem="sessão concluída",
+    )
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.CONCLUIDA
+    assert resultado.encerrada_por_servidor_indisponivel is True
+    assert resultado.servidor_indisponivel_desde == 132
+    assert resultado.minutos_perdidos == tuple(range(4, 16))
+
+
+def test_AC_035_2_resultado_sem_planilha_traz_a_marca_o_instante_e_os_perdidos(
+    tmp_path,
+):
+    a = anotador_que_perdeu_o_servidor(tmp_path, desde_segundos=0)
+    a.terminar(
+        Fase.SEM_PLANILHA,
+        id_sessao=ID_SESSAO,
+        status="INVALIDA",
+        mensagem="nenhum clipe da sessão pôde ser processado; não há planilha.",
+    )
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.fase is Fase.SEM_PLANILHA
+    assert resultado.encerrada_por_servidor_indisponivel is True
+    assert resultado.servidor_indisponivel_desde == 0
+    assert resultado.minutos_perdidos == tuple(range(4, 16))
+
+
+def test_AC_035_1_instante_da_queda_e_truncado_ao_segundo_a_partir_de_t0(tmp_path):
+    a = anotador_que_perdeu_o_servidor(tmp_path, desde_segundos=59.999)
+    a.terminar(Fase.SEM_PLANILHA, id_sessao=ID_SESSAO, status="INVALIDA", mensagem="x")
+
+    assert ler_progresso(tmp_path).resultado.servidor_indisponivel_desde == 59
+
+
+def test_AC_035_3_sessao_sem_a_marca_traz_os_padroes(tmp_path):
+    with conectar(tmp_path) as conexao:
+        gravar_sessao(conexao, status=StatusDaSessao.DEGRADADA, minutos_perdidos=(2,))
+    planilha = tmp_path / "000013_20260907_0800_2min.xlsx"
+    planilha.write_bytes(b"xlsx")
+    a = anotador(tmp_path)
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, False)
+    a.terminar(
+        Fase.CONCLUIDA,
+        id_sessao=ID_SESSAO,
+        status="DEGRADADA",
+        planilha=str(planilha),
+        mensagem="sessão concluída",
+    )
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.encerrada_por_servidor_indisponivel is False
+    assert resultado.servidor_indisponivel_desde is None
+    assert resultado.minutos_perdidos == ()
+
+
+def test_AC_035_3_fase_que_nao_e_desfecho_de_captura_fica_nos_padroes(tmp_path):
+    a = anotador_que_perdeu_o_servidor(tmp_path)
+    a.terminar(
+        Fase.PROCESSAMENTO_CANCELADO,
+        id_sessao=ID_SESSAO,
+        status="INVALIDA",
+        mensagem="reprocesse",
+    )
+
+    resultado = ler_progresso(tmp_path).resultado
+
+    assert resultado.encerrada_por_servidor_indisponivel is False
+    assert resultado.servidor_indisponivel_desde is None
+    assert resultado.minutos_perdidos == ()

@@ -24,7 +24,7 @@ from datetime import datetime, timezone
 import httpx
 import pytest
 
-from auto_counter.capture.probe import Checagem, checar, e_novo
+from auto_counter.capture.probe import Checagem, FalhaDeServidor, checar, e_novo
 
 URL_DO_CLIPE = "https://exemplo.invalido/videos/000013/last_video.mp4"
 
@@ -149,11 +149,9 @@ def test_AC_003_2_etag_igual_a_menos_de_aspas_ou_prefixo_fraco_nao_e_clipe_novo(
         resposta_com(None, None),
         # Last-Modified que não parseia cai no mesmo caminho.
         resposta_com('"abc123"', "ontem de tarde"),
-        # E falha de rede ou HTTP de erro também: nenhuma exceção crua sai daqui.
+        # E resposta HTTP 4xx também: o servidor respondeu (AC-033.1). Falha de
+        # rede, timeout e 5xx têm desfecho próprio (`FalhaDeServidor`).
         httpx.Response(404),
-        httpx.Response(500),
-        httpx.ConnectError("sem rota para o host"),
-        httpx.ReadTimeout("estourou o tempo de leitura"),
     ],
 )
 def test_AC_003_2_checagem_sem_os_headers_necessarios_nao_produz_clipe_novo(resposta):
@@ -191,3 +189,55 @@ def test_AC_003_2_checagem_carrega_o_etag_normalizado_para_o_manifest():
 
     assert isinstance(checagem, Checagem)
     assert checagem.etag == "abc123"
+
+
+def test_AC_033_1_conexao_recusada_e_falha_de_servidor():
+    cliente = cliente_que_responde(httpx.ConnectError("conexão recusada"))
+
+    resultado = checar(cliente, URL_DO_CLIPE, agora=relogio_fixo())
+
+    assert isinstance(resultado, FalhaDeServidor)
+    assert resultado.instante == RELOGIO_LOCAL
+    assert resultado.descricao
+
+
+def test_AC_033_1_timeout_e_falha_de_servidor():
+    cliente = cliente_que_responde(httpx.ReadTimeout("estourou o tempo de leitura"))
+
+    resultado = checar(cliente, URL_DO_CLIPE, agora=relogio_fixo())
+
+    assert isinstance(resultado, FalhaDeServidor)
+    assert resultado.descricao == "timeout"
+    assert resultado.instante == RELOGIO_LOCAL
+
+
+@pytest.mark.parametrize("codigo", [500, 502, 503, 504])
+def test_AC_033_1_resposta_5xx_e_falha_de_servidor(codigo):
+    cliente = cliente_que_responde(httpx.Response(codigo))
+
+    resultado = checar(cliente, URL_DO_CLIPE, agora=relogio_fixo())
+
+    assert isinstance(resultado, FalhaDeServidor)
+    assert str(codigo) in resultado.descricao
+    assert resultado.instante == RELOGIO_LOCAL
+
+
+@pytest.mark.parametrize("codigo", [404, 403])
+def test_AC_033_1_resposta_404_e_403_nao_e_falha_de_servidor(codigo):
+    cliente = cliente_que_responde(httpx.Response(codigo))
+
+    assert checar(cliente, URL_DO_CLIPE, agora=relogio_fixo()) is None
+
+
+def test_AC_033_1_resposta_200_sem_etag_nao_e_falha_de_servidor():
+    cliente = cliente_que_responde(
+        resposta_com(None, "Sun, 07 Sep 2026 12:00:00 GMT")
+    )
+
+    assert checar(cliente, URL_DO_CLIPE, agora=relogio_fixo()) is None
+
+
+def test_AC_033_1_falha_de_servidor_nao_e_clipe_novo():
+    falha = FalhaDeServidor(descricao="timeout", instante=RELOGIO_LOCAL)
+
+    assert e_novo(falha, set()) is False

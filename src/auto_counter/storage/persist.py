@@ -167,6 +167,9 @@ def persistir_sessao(
             encerrada_pelo_usuario=manifest.encerrada_pelo_usuario,
             status=manifest.status,
             minutos_perdidos=[item.minuto for item in manifest.minutos_perdidos],
+            encerrada_por_servidor_indisponivel=(
+                manifest.encerrada_por_servidor_indisponivel
+            ),
             comitar=False,
         )
         completar_processamento(
@@ -263,6 +266,7 @@ def persistir_sessao_de_upload(
             encerrada_pelo_usuario=False,
             status=status,
             minutos_perdidos=sem_dado,
+            encerrada_por_servidor_indisponivel=False,
             comitar=False,
         )
         completar_processamento(

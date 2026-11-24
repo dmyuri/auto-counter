@@ -51,6 +51,7 @@ from tests.test_capture_interrupt import (
     servidor_de_um_clipe_por_minuto,
 )
 from tests.test_capture_session import (  # noqa: F401  (fixtures usadas por nome)
+    INICIO as INICIO_DA_SESSAO,
     LIXO,
     DormirFalso,
     RelogioFalso,
@@ -986,3 +987,106 @@ def test_AC_012_7_pedido_que_chega_com_a_captura_ja_no_fim_cancela(
     assert estado.minutos_capturados == (1, 2)
     assert detectores == []
     assert videos(dir_da_sessao(data_dir)) == []
+
+
+# --- servidor-indisponivel: orquestração (T-06, D-10) ---
+
+
+def servidor_que_cai(relogio, clipes_legiveis, *, desde=None):
+    """Três clipes capturados e o servidor fora do ar a partir de `desde`."""
+    from tests.test_capture_session import (
+        FORA_DO_AR,
+        PUBLICACOES_DOS_TRES_CLIPES,
+        QUEDA_DEPOIS_DO_MINUTO_3,
+        ServidorComFalhas,
+    )
+
+    return ServidorComFalhas(
+        relogio,
+        PUBLICACOES_DOS_TRES_CLIPES,
+        clipes_legiveis("clipe-a", "clipe-b", "clipe-c"),
+        indisponivel=[
+            (QUEDA_DEPOIS_DO_MINUTO_3 if desde is None else desde, FORA_DO_AR, "conexao")
+        ],
+    )
+
+
+def test_AC_033_6_sessao_encerrada_por_servidor_com_minuto_capturado_gera_planilha(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai(relogio, clipes_legiveis)
+
+    estado, detectores = executa(data_dir, servidor, relogio, minutos=15)
+
+    assert estado.fase is Fase.CONCLUIDA
+    assert estado.planilha is not None
+    assert len(detectores) == 1
+    assert estado.minutos_capturados == (1, 2, 3)
+    assert estado.encerrada_por_servidor_indisponivel is True
+    assert estado.servidor_indisponivel_desde is not None
+    assert estado.status == StatusDaSessao.INVALIDA.value
+    # O que o arquivo guarda é o mesmo que a função devolveu.
+    em_disco = ler_estado(data_dir)
+    assert em_disco.encerrada_por_servidor_indisponivel is True
+    assert em_disco.servidor_indisponivel_desde == estado.servidor_indisponivel_desde
+    # E a marca chegou ao banco pelo processamento (AC-036.2).
+    with conectar(data_dir) as conexao:
+        assert ler_sessao(conexao, estado.id_sessao).encerrada_por_servidor_indisponivel
+
+
+def test_AC_033_8_sessao_encerrada_por_servidor_sem_minuto_termina_sem_planilha(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai(relogio, clipes_legiveis, desde=0.0)
+
+    estado, detectores = executa(data_dir, servidor, relogio, minutos=3)
+
+    assert estado.fase is Fase.SEM_PLANILHA
+    assert estado.planilha is None
+    assert estado.status == StatusDaSessao.INVALIDA.value
+    assert estado.encerrada_por_servidor_indisponivel is True
+    # A primeira falha é a checagem imediata do comando, em T0.
+    assert estado.servidor_indisponivel_desde == INICIO_DA_SESSAO
+    assert detectores == []
+    assert list(data_dir.glob("*.xlsx")) == []
+    with conectar(data_dir) as conexao:
+        assert ler_sessao(conexao, estado.id_sessao).encerrada_por_servidor_indisponivel
+
+
+def test_AC_012_1_nao_tentados_entram_como_perdidos_no_estado(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    servidor = servidor_que_cai(relogio, clipes_legiveis)
+
+    estado, _ = executa(data_dir, servidor, relogio, minutos=15)
+
+    assert estado.minutos_capturados == (1, 2, 3)
+    assert estado.minutos_perdidos == tuple(range(4, 16))
+    assert ler_estado(data_dir).minutos_perdidos == tuple(range(4, 16))
+
+
+def test_AC_017_2_tempo_continua_de_t0_apos_encerramento_por_servidor(
+    data_dir, modelo, clipes_legiveis
+):
+    relogio = RelogioFalso()
+    inicio = relogio.agora()
+    servidor = servidor_que_cai(relogio, clipes_legiveis)
+    visto = []
+
+    def criar_detector(caminho, config):
+        visto.append(ler_estado(data_dir))
+        return DetectorDuble()
+
+    estado, _ = executa(
+        data_dir, servidor, relogio, minutos=15, criar_detector=criar_detector
+    )
+
+    assert visto[0].fase is Fase.PROCESSAMENTO
+    assert visto[0].iniciada_em == inicio
+    assert estado.iniciada_em == inicio
+    # O processamento começou depois do encerramento, e T0 não se mexeu.
+    assert visto[0].encerrada_por_servidor_indisponivel is True
+    assert estado.terminada_em >= inicio

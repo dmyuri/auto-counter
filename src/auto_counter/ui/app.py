@@ -123,6 +123,7 @@ from auto_counter.pipeline.progress import (
     Resultado,
     Situacao,
     VideoNaTela,
+    aviso_de_servidor_indisponivel,
     formatar_tempo,
     ler_progresso,
 )
@@ -983,17 +984,35 @@ def _tempo_total(resultado: Resultado) -> None:
         st.markdown(f"Tempo total: {formatar_tempo(resultado.tempo_total)}")
 
 
+def _aviso_de_servidor_indisponivel(resultado: Resultado) -> None:
+    """O aviso de AC-035.1 e AC-035.2, só na sessão encerrada por servidor
+    indisponível (AC-035.3).
+
+    O MM:SS é o instante da primeira falha da sequência, relativo a T0 (D-11).
+    """
+    if not resultado.encerrada_por_servidor_indisponivel:
+        return
+    st.warning(
+        aviso_de_servidor_indisponivel(
+            resultado.minutos_perdidos,
+            desde_segundos=resultado.servidor_indisponivel_desde,
+        )
+    )
+
+
 def _desfecho_da_conclusao(resultado: Resultado) -> None:
-    """"Concluída · MM:SS" ou "Interrompida pelo usuário · MM:SS" (AC-023.2).
+    """"Concluída · MM:SS", "Interrompida pelo usuário · MM:SS" ou "Encerrada
+    por servidor indisponível · MM:SS" (AC-023.2, AC-035.1).
 
     Substitui a linha "Tempo total" na sessão concluída, para o tempo não
     aparecer duas vezes. Sem o tempo total (estado antigo), só o texto.
     """
-    texto = (
-        "Interrompida pelo usuário"
-        if resultado.encerrada_pelo_usuario
-        else "Concluída"
-    )
+    if resultado.encerrada_por_servidor_indisponivel:
+        texto = "Encerrada por servidor indisponível"
+    elif resultado.encerrada_pelo_usuario:
+        texto = "Interrompida pelo usuário"
+    else:
+        texto = "Concluída"
     if resultado.tempo_total is not None:
         texto += f" · {formatar_tempo(resultado.tempo_total)}"
     st.markdown(f"**{texto}**")
@@ -1092,6 +1111,7 @@ def _resultado(resultado: Resultado) -> None:
         st.markdown(f"status {resultado.status}")
         if resultado.aviso:
             st.warning(resultado.aviso)
+        _aviso_de_servidor_indisponivel(resultado)
         if resultado.planilha is not None:
             _cartao_da_planilha(resultado)
         elif resultado.mensagem:
@@ -1101,6 +1121,7 @@ def _resultado(resultado: Resultado) -> None:
         st.warning(
             f"Status da sessão: {resultado.status}. {resultado.mensagem}"
         )
+        _aviso_de_servidor_indisponivel(resultado)
         _tempo_total(resultado)
     elif resultado.fase is Fase.PROCESSAMENTO_CANCELADO:
         st.info(MENSAGEM_PROCESSAMENTO_CANCELADO)

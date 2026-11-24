@@ -101,6 +101,13 @@ Critérios de aceite:
   parou de ser atualizado no servidor), quando a janela se esgota, então o minuto
   é marcado como não capturado e a captura segue para o minuto seguinte, sem
   interromper a sessão.
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > O critério continua valendo quando o servidor responde, mas a captura deixa
+  > de seguir para o minuto seguinte quando o servidor fica indisponível por 2
+  > minutos seguidos, ou no único minuto de uma sessão de 1 minuto: aí ela é
+  > encerrada, e o minuto ganha motivo próprio, distinto do ETag parado
+  > (AC-033.2, AC-033.4 e AC-033.10).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-004.3 — Dado um clipe baixado cujo conteúdo não abre como vídeo legível,
   quando o sistema o valida, então descarta o arquivo, marca o minuto como não
@@ -122,6 +129,12 @@ Critérios de aceite:
   > falha de leitura, com o mesmo limite (AC-030.4 e SUP-095).
   > Ver `.spec/features/processamento-upload/spec.md`.
 
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > Na sessão encerrada por servidor indisponível, a lista de minutos perdidos
+  > passa a incluir os minutos não tentados depois do encerramento, sobre o
+  > mesmo N pedido (AC-033.5).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
+
   AC-004.6 — Dado uma sessão de N minutos com mais de 20% de N perdidos, quando a
   captura termina, então a sessão recebe status INVÁLIDA e a lista dos números
   dos minutos perdidos fica registrada.
@@ -129,6 +142,12 @@ Critérios de aceite:
   > Na sessão de upload, o minuto perdido passa a ser o minuto sem dado por
   > falha de leitura, com o mesmo limite (AC-030.4 e SUP-095).
   > Ver `.spec/features/processamento-upload/spec.md`.
+
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > Na sessão encerrada por servidor indisponível, a lista de minutos perdidos
+  > passa a incluir os minutos não tentados depois do encerramento, sobre o
+  > mesmo N pedido (AC-033.5).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-004.7 — Dado um clipe baixado cujo conteúdo é byte a byte igual ao do clipe
   imediatamente anterior aceito na sessão, ainda que o ETag e o Last-Modified

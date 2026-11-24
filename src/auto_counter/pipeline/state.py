@@ -37,6 +37,12 @@ anterior não tem os dois campos e é lido com `False` e `None`.
 Por `processamento-upload` (D-11), o arquivo também carrega a origem da sessão
 (`origem`, `CAMERA` ou `UPLOAD`) e, no upload, o estado de cada vídeo
 (`videos`). Arquivo de versão anterior é lido com `"CAMERA"` e `()`.
+
+Por `servidor-indisponivel` (D-10), o arquivo também carrega a marca de captura
+encerrada por servidor indisponível (`encerrada_por_servidor_indisponivel`) e o
+instante da primeira falha da sequência que levou ao encerramento
+(`servidor_indisponivel_desde`). Arquivo de versão anterior é lido com `False` e
+`None`. Não há fase nova: o desfecho continua `CONCLUIDA` ou `SEM_PLANILHA`.
 """
 
 import json
@@ -145,6 +151,10 @@ class EstadoDaSessao:
     """`CAMERA` ou `UPLOAD` (processamento-upload, D-11)."""
     videos: tuple[VideoNoEstado, ...] = ()
     """Só no upload: os vídeos na ordem da lista, com a situação de cada um."""
+    encerrada_por_servidor_indisponivel: bool = False
+    """AC-033.5: a captura acabou porque o servidor ficou indisponível."""
+    servidor_indisponivel_desde: datetime | None = None
+    """Instante UTC da primeira falha da sequência que levou ao encerramento."""
 
 
 @dataclass(frozen=True)
@@ -230,6 +240,14 @@ def _como_dicionario(estado: EstadoDaSessao) -> dict:
             {"nome": video.nome, "situacao": video.situacao.value}
             for video in estado.videos
         ],
+        "encerrada_por_servidor_indisponivel": (
+            estado.encerrada_por_servidor_indisponivel
+        ),
+        "servidor_indisponivel_desde": (
+            None
+            if estado.servidor_indisponivel_desde is None
+            else _em_utc(estado.servidor_indisponivel_desde).isoformat()
+        ),
     }
 
 
@@ -311,6 +329,18 @@ def ler_estado(data_dir: str | Path) -> EstadoDaSessao | None:
                 )
                 for item in dados.get("videos", [])
             ),
+            # Arquivo de versão anterior não tem os dois campos abaixo
+            # (servidor-indisponivel, D-10): valem `False` e `None`.
+            encerrada_por_servidor_indisponivel=bool(
+                dados.get("encerrada_por_servidor_indisponivel", False)
+            ),
+            servidor_indisponivel_desde=(
+                None
+                if dados.get("servidor_indisponivel_desde") is None
+                else _em_utc(
+                    datetime.fromisoformat(dados["servidor_indisponivel_desde"])
+                )
+            ),
         )
     except (OSError, ValueError, KeyError, TypeError):
         return None
@@ -391,6 +421,19 @@ class AnotadorDoEstado:
                 self._estado,
                 minutos_perdidos=(*self._estado.minutos_perdidos, minuto),
             )
+        self._gravar()
+
+    def captura_encerrada_por_servidor(self, desde: datetime) -> None:
+        """Marca a captura como encerrada por servidor indisponível (AC-033.5).
+
+        `desde` é o instante da primeira falha da sequência ininterrupta que
+        levou ao encerramento (SUP-129). A fase não muda (D-10).
+        """
+        self._estado = replace(
+            self._estado,
+            encerrada_por_servidor_indisponivel=True,
+            servidor_indisponivel_desde=_em_utc(desde),
+        )
         self._gravar()
 
     def processamento_iniciado(self, id_sessao: str, a_processar: int) -> None:

@@ -189,6 +189,16 @@ def executar_sessao(
             )
         id_sessao = captura.id_sessao
 
+        # Antes de qualquer `terminar` ou `processamento_iniciado`: o estado
+        # carrega a marca desde o início do processamento (D-10, AC-033.6).
+        if (
+            captura.encerrada_por_servidor_indisponivel
+            and captura.servidor_indisponivel_desde is not None
+        ):
+            anotador.captura_encerrada_por_servidor(
+                captura.servidor_indisponivel_desde
+            )
+
         # O arquivo de pedido só existe se o botão da interface o criou (D-19):
         # o Ctrl+C é um objeto em memória. Conferir **antes** de consumir.
         if ParadaPorArquivo(data_dir).foi_pedida():

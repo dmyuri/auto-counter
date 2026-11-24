@@ -12,11 +12,13 @@ informação de diagnóstico, e nada do tempo da sessão sai dele).
 Nada aqui baixa vídeo: este módulo só pergunta ao servidor se há clipe novo. O
 download com retry é de `capture.download` (AC-004.1).
 
-Conforme D-4 do `_tasks.md`, uma checagem sem ETag, sem Last-Modified, com
-Last-Modified que não parseia ou que falha por rede/HTTP de erro não produz
+Conforme D-4 do `_tasks.md` de `captura-clipes`, uma checagem sem ETag, sem
+Last-Modified, com Last-Modified que não parseia ou com HTTP 4xx não produz
 clipe identificável: `checar` devolve `None`, o chamador aguarda a próxima
 checagem e, se a janela de 90 s se esgotar assim, o minuto é marcado como não
-capturado (AC-004.2). **Nenhuma exceção crua sai deste módulo** (`CLAUDE.md`).
+capturado (AC-004.2). Erro de conexão, DNS, rede, timeout e HTTP 500 a 599 têm
+desfecho próprio, `FalhaDeServidor` (AC-033.1). **Nenhuma exceção crua sai
+deste módulo** (`CLAUDE.md`).
 
 O `httpx.Client` e o relógio entram por parâmetro (D-7): nenhum teste deste
 projeto toca o servidor da NitTrans nem espera o relógio real. A URL vem de
@@ -48,6 +50,19 @@ class Checagem:
     etag: str
     last_modified: datetime
     relogio_local: datetime
+
+
+@dataclass(frozen=True)
+class FalhaDeServidor:
+    """Uma checagem que falhou por culpa do servidor, e não do clipe (AC-033.1).
+
+    Vale para erro de conexão, DNS ou rede, timeout e HTTP de 500 a 599. Uma
+    resposta qualquer do servidor (404, 403, 200) não é falha de servidor.
+    `instante` é o `agora()` da checagem.
+    """
+
+    descricao: str
+    instante: datetime
 
 
 def normalizar_etag(bruto: str) -> str:
@@ -85,14 +100,15 @@ def _last_modified_em_utc(bruto: str) -> datetime | None:
 
 def checar(
     cliente: httpx.Client, url: str, *, agora: Callable[[], datetime]
-) -> Checagem | None:
+) -> Checagem | FalhaDeServidor | None:
     """Pergunta ao servidor, por HEAD, qual clipe está publicado agora.
 
     Devolve a `Checagem` quando o servidor entrega os dois headers e o
-    Last-Modified parseia. Devolve `None` em todos os outros casos — headers
-    faltando, data ilegível, erro de rede, timeout ou resposta HTTP de erro —
-    porque para o chamador o desfecho é o mesmo: esta checagem não produziu
-    clipe identificável, e o certo é aguardar a próxima (D-4).
+    Last-Modified parseia. Devolve `FalhaDeServidor` em erro de conexão, DNS ou
+    rede, timeout e HTTP 500 a 599 (AC-033.1). Devolve `None` nos demais casos
+    — headers faltando, data ilegível ou HTTP 4xx —, em que o servidor
+    respondeu mas a checagem não produziu clipe identificável, e o certo é
+    aguardar a próxima (D-4 de `captura-clipes`).
 
     É sempre HEAD: nesta etapa o conteúdo não é baixado, nem quando o clipe é
     novo. Quem baixa é `capture.download`, e só depois de `e_novo` aprovar.
@@ -100,6 +116,15 @@ def checar(
     try:
         resposta = cliente.head(url, follow_redirects=True)
         resposta.raise_for_status()
+    except httpx.TimeoutException:
+        return FalhaDeServidor("timeout", agora())
+    except httpx.TransportError as erro:
+        return FalhaDeServidor(str(erro) or type(erro).__name__, agora())
+    except httpx.HTTPStatusError as erro:
+        codigo = erro.response.status_code
+        if 500 <= codigo <= 599:
+            return FalhaDeServidor(f"o servidor respondeu {codigo}", agora())
+        return None
     except httpx.HTTPError:
         return None
 
@@ -119,7 +144,9 @@ def checar(
     return Checagem(etag=etag, last_modified=last_modified, relogio_local=agora())
 
 
-def e_novo(checagem: Checagem | None, etags_ja_aceitos: Iterable[str]) -> bool:
+def e_novo(
+    checagem: Checagem | FalhaDeServidor | None, etags_ja_aceitos: Iterable[str]
+) -> bool:
     """Diz se esta checagem revelou um clipe que ainda não virou minuto.
 
     Falso quando o ETag é o mesmo já visto — e aí o conteúdo **não** é baixado
@@ -131,9 +158,10 @@ def e_novo(checagem: Checagem | None, etags_ja_aceitos: Iterable[str]) -> bool:
     são normalizados na comparação, para que a origem deles (header cru ou
     manifest) não mude a resposta.
 
-    Checagem `None` é falso, sem estourar: ela não produziu clipe (D-4).
+    Checagem `None` ou `FalhaDeServidor` é falso, sem estourar: ela não produziu
+    clipe (D-4).
     """
-    if checagem is None:
+    if not isinstance(checagem, Checagem):
         return False
     aceitos = {normalizar_etag(etag) for etag in etags_ja_aceitos}
     return checagem.etag not in aceitos

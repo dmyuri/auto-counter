@@ -64,6 +64,10 @@ Critérios de aceite:
   AC-012.1 — Dado uma captura em andamento, quando um minuto é capturado ou
   perdido, então a interface passa a mostrar quantos minutos foram capturados do
   total pedido e quantos foram perdidos até ali.
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > No encerramento por servidor indisponível, os minutos não tentados passam a
+  > contar de uma vez como perdidos, sem janela própria (AC-033.4 e AC-033.5).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-012.2 — Dado uma sessão em andamento, quando a interface é consultada, então
   ela indica em qual das duas fases a sessão está, captura ou processamento, e o
@@ -106,6 +110,13 @@ Critérios de aceite:
   > concluída passa a listar os clipes para download individual e em `.zip`
   > (AC-025.1 a AC-025.4).
   > Ver `.spec/features/download-clipes/spec.md`.
+
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > A sessão concluída que foi encerrada por servidor indisponível passa a
+  > exibir o desfecho "Encerrada por servidor indisponível" e o aviso com o
+  > instante da queda e os minutos perdidos, mantidos o status e o download
+  > (AC-035.1).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-012.4 — Dado uma sessão em andamento, quando a interface é fechada e aberta
   de novo, então a sessão continua em andamento, o progresso dela é reencontrado
@@ -159,6 +170,11 @@ Critérios de aceite:
   > O aviso de que não há planilha passa a aparecer no painel de resultados,
   > sem cartão de planilha (AC-023.4).
   > Ver `.spec/features/layout-interface/spec.md`.
+
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > A sessão sem planilha encerrada por servidor indisponível passa a exibir
+  > também o aviso com o instante da queda e os minutos perdidos (AC-035.2).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-012.7 — Dado uma sessão em captura iniciada pela interface, quando o
   usuário a encerra pelo botão "Parar antecipadamente" (AC-023.1), então a

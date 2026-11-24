@@ -11,6 +11,10 @@ Comportamento em `.spec/features/captura-clipes/spec.md`:
 - AC-004.7 — clipe cujo conteúdo é byte a byte igual ao do clipe imediatamente
   anterior aceito é descartado, não abre minuto e a janela continua; esgotada a
   janela sem conteúdo inédito, o minuto é perdido pela mesma regra de AC-004.2;
+- AC-033.2 a AC-033.11 — minuto cujas checagens foram todas falha de servidor
+  tem motivo próprio, e dois desses minutos seguidos encerram a captura (um só,
+  na sessão de 1 minuto), com os minutos restantes registrados como não
+  tentados;
 - AC-004.1 e AC-004.3 entram aqui como tradução: download esgotado e clipe
   ilegível viram desfecho de minuto, nunca exceção para o usuário.
 
@@ -61,7 +65,7 @@ from auto_counter.capture.manifest import (
     id_da_sessao,
     nome_do_arquivo_do_minuto,
 )
-from auto_counter.capture.probe import Checagem, checar, e_novo
+from auto_counter.capture.probe import Checagem, FalhaDeServidor, checar, e_novo
 from auto_counter.capture.readable import descartar, e_legivel
 from auto_counter.capture.status import ResultadoDoStatus, StatusDaSessao, classificar
 
@@ -90,6 +94,23 @@ MOTIVO_CONTEUDO_REPETIDO = (
 Texto próprio, e não o de AC-004.2: quem ler o manifest depois precisa saber
 que o arquivo era o mesmo, e não que o ETag ficou parado (SUP-051).
 """
+
+
+MOTIVO_SERVIDOR_INDISPONIVEL = (
+    "servidor indisponível: todas as checagens da janela de 90 s falharam "
+    "(última falha: {descricao})"
+)
+"""Perda por AC-033.2: texto próprio, distinto de `MOTIVO_JANELA_ESGOTADA`."""
+
+MOTIVO_NAO_TENTADO = (
+    "minuto não tentado: a captura foi encerrada por servidor indisponível"
+)
+"""Minuto de k+1 a N depois do encerramento por AC-033.4."""
+
+MINUTOS_SEGUIDOS_PARA_ENCERRAR = 2
+"""Minutos com servidor indisponível seguidos que encerram a captura (SUP-112).
+
+Na sessão de 1 minuto basta um (SUP-119)."""
 
 
 class Parada(Protocol):
@@ -149,6 +170,7 @@ class Persistencia(Protocol):
         encerrada_pelo_usuario: bool,
         status: StatusDaSessao,
         minutos_perdidos: tuple[int, ...],
+        encerrada_por_servidor_indisponivel: bool,
     ) -> None: ...
 
 
@@ -171,6 +193,13 @@ class ResultadoDaSessao:
     minutos_perdidos: tuple[MinutoPerdido, ...]
     inicio: datetime | None
     fim: datetime | None
+    encerrada_por_servidor_indisponivel: bool
+    """AC-033.5: a captura acabou porque o servidor ficou indisponível."""
+    servidor_indisponivel_desde: datetime | None
+    """O instante da primeira falha da sequência que levou ao encerramento
+    (D-2, SUP-129). Nulo quando a sessão não encerrou por servidor."""
+    iniciada_em: datetime
+    """O relógio do comando, T0 da sessão (AC-017.1)."""
 
 
 @dataclass(frozen=True)
@@ -188,9 +217,25 @@ class _ClipeAceito:
 
 @dataclass(frozen=True)
 class _MinutoPerdido:
-    """A janela terminou sem clipe aceitável, e este foi o último motivo."""
+    """A janela terminou sem clipe aceitável, e este foi o último motivo.
+
+    `servidor_indisponivel` é verdadeiro quando a janela teve pelo menos uma
+    checagem e todas foram falha de servidor (D-3, SUP-114).
+    """
 
     motivo: str
+    servidor_indisponivel: bool = False
+
+
+class _SequenciaDeFalhas:
+    """O instante da primeira falha da sequência ininterrupta atual (D-2).
+
+    Atravessa a troca de minuto e é zerada pela primeira checagem que não for
+    `FalhaDeServidor`.
+    """
+
+    def __init__(self) -> None:
+        self.desde: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -221,6 +266,7 @@ def _janela_de_um_minuto(
     agora: Callable[[], datetime],
     dormir: Callable[[float], None],
     parada: "Parada | None",
+    sequencia: _SequenciaDeFalhas,
 ) -> _ClipeAceito | _MinutoPerdido | _ParadaPedida:
     """Roda a janela de 90 s de um minuto e devolve o desfecho dele.
 
@@ -240,6 +286,10 @@ def _janela_de_um_minuto(
     - parada pedida entre duas checagens, durante a espera entre elas ou
       durante o download → a janela é abandonada e o minuto não existe, nem
       como capturado nem como perdido (AC-003.6, AC-012.7);
+    - checagem com falha de servidor (AC-033.1) → também aguarda a próxima; se
+      **todas** as checagens da janela forem falha de servidor, o minuto é
+      perdido com motivo próprio e marcado como minuto com servidor
+      indisponível (AC-033.2, SUP-114);
     - janela vencida → minuto perdido, com o motivo.
 
     Nenhuma exceção das camadas de baixo escapa: rede, HTTP, header ausente e
@@ -248,12 +298,23 @@ def _janela_de_um_minuto(
     prazo = inicio_da_janela + timedelta(seconds=JANELA_DO_MINUTO)
     destino = dir_sessao / nome_do_arquivo_do_minuto(minuto)
     motivo = MOTIVO_JANELA_ESGOTADA
+    checagens = 0
+    falhas = 0
+    ultima_falha = ""
 
     while agora() < prazo:
         if _parada_pedida(parada):
             return _ParadaPedida()
 
         checagem = checar(cliente, url, agora=agora)
+        checagens += 1
+        if isinstance(checagem, FalhaDeServidor):
+            falhas += 1
+            ultima_falha = checagem.descricao
+            if sequencia.desde is None:
+                sequencia.desde = checagem.instante
+        else:
+            sequencia.desde = None
 
         if e_novo(checagem, etags_ja_aceitos):
             assert checagem is not None  # `e_novo` é falso para checagem nula.
@@ -317,6 +378,11 @@ def _janela_de_um_minuto(
         ):
             return _ParadaPedida()
 
+    if checagens > 0 and falhas == checagens:
+        return _MinutoPerdido(
+            motivo=MOTIVO_SERVIDOR_INDISPONIVEL.format(descricao=ultima_falha),
+            servidor_indisponivel=True,
+        )
     return _MinutoPerdido(motivo=motivo)
 
 
@@ -389,6 +455,13 @@ def capturar(
     para processamento: o retorno é um resultado de sessão normal, com status
     próprio, e não um erro. Enquanto `parada` for `None`, o laço vai até N.
 
+    Dois minutos com servidor indisponível seguidos (um só, na sessão de 1
+    minuto) encerram a captura (AC-033.4, AC-033.7, AC-033.10): os minutos
+    restantes são registrados como não tentados, a duração real é o N pedido, o
+    encerramento pelo usuário fica "não" e a sessão fica marcada como encerrada
+    por servidor indisponível (AC-033.5). A parada do usuário prevalece, e o
+    minuto que ela abandona não conta na sequência (AC-033.11).
+
     `manter_videos` é a decisão de preservação de AC-003.5, desligada por padrão
     (SUP-012): ela só é **gravada** no manifest aqui. A captura nunca apaga
     vídeo — quem descarta é o encerramento da sessão, depois que
@@ -436,6 +509,13 @@ def capturar(
     sha256_do_anterior: str | None = None
     inicio_da_janela = relogio_do_comando
     encerrada_pelo_usuario = False
+    encerrada_por_servidor = False
+    minutos_seguidos_sem_servidor = 0
+    sequencia = _SequenciaDeFalhas()
+    desde_quando: datetime | None = None
+    limite_de_minutos_seguidos = (
+        1 if duracao_pedida == 1 else MINUTOS_SEGUIDOS_PARA_ENCERRAR
+    )
 
     for minuto in range(1, duracao_pedida + 1):
         if _parada_pedida(parada):
@@ -453,6 +533,7 @@ def capturar(
             agora=agora,
             dormir=dormir,
             parada=parada,
+            sequencia=sequencia,
         )
 
         if isinstance(desfecho, _ParadaPedida):
@@ -476,6 +557,22 @@ def capturar(
         if ao_resolver_minuto is not None:
             ao_resolver_minuto(minuto, isinstance(desfecho, _ClipeAceito))
 
+        if isinstance(desfecho, _MinutoPerdido) and desfecho.servidor_indisponivel:
+            minutos_seguidos_sem_servidor += 1
+        else:
+            minutos_seguidos_sem_servidor = 0
+
+        if minutos_seguidos_sem_servidor >= limite_de_minutos_seguidos:
+            # AC-033.4: a captura acaba aqui, sem nenhuma requisição depois, e
+            # os minutos restantes entram de uma vez como não tentados.
+            encerrada_por_servidor = True
+            desde_quando = sequencia.desde
+            for restante in range(minuto + 1, duracao_pedida + 1):
+                manifest.registrar_perda(restante, motivo=MOTIVO_NAO_TENTADO)
+                if ao_resolver_minuto is not None:
+                    ao_resolver_minuto(restante, False)
+            break
+
         inicio_da_janela = agora()
 
     minutos_perdidos = [item.minuto for item in manifest.minutos_perdidos]
@@ -487,6 +584,8 @@ def capturar(
         resultado,
         duracao_real=duracao_real,
         encerrada_pelo_usuario=encerrada_pelo_usuario,
+        encerrada_por_servidor_indisponivel=encerrada_por_servidor,
+        servidor_indisponivel_desde=desde_quando,
     )
 
     if persistencia is not None:
@@ -499,6 +598,7 @@ def capturar(
             encerrada_pelo_usuario=encerrada_pelo_usuario,
             status=resultado.status,
             minutos_perdidos=tuple(minutos_perdidos),
+            encerrada_por_servidor_indisponivel=encerrada_por_servidor,
         )
 
     return ResultadoDaSessao(
@@ -512,4 +612,7 @@ def capturar(
         minutos_perdidos=manifest.minutos_perdidos,
         inicio=manifest.inicio,
         fim=manifest.fim,
+        encerrada_por_servidor_indisponivel=encerrada_por_servidor,
+        servidor_indisponivel_desde=desde_quando,
+        iniciada_em=relogio_do_comando,
     )

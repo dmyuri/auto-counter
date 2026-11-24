@@ -105,6 +105,10 @@ from auto_counter.pipeline.ambiente import (  # noqa: F401 (reexportados)
 )
 from auto_counter.pipeline.lock import OutraSessaoEmAndamentoError, adquirir_trava
 from auto_counter.pipeline.preparo_upload import triar_arquivos
+from auto_counter.pipeline.progress import (
+    aviso_de_servidor_indisponivel,
+    segundos_desde_t0,
+)
 from auto_counter.pipeline.run import executar_sessao
 from auto_counter.pipeline.upload import executar_upload
 from auto_counter.counting.upload import processar_sessao_de_upload
@@ -370,6 +374,28 @@ class ParadaPorCtrlC:
         self._pedida = True
 
 
+def _linha_de_servidor_indisponivel(
+    t0: datetime, desde: datetime | None, minutos_perdidos: list[int]
+) -> str:
+    """A linha de AC-035.4: a mesma frase da interface, com T0 da sessão (D-11)."""
+    return aviso_de_servidor_indisponivel(
+        minutos_perdidos,
+        desde_segundos=None if desde is None else segundos_desde_t0(t0, desde),
+    )
+
+
+def _imprime_servidor_indisponivel_do_estado(estado) -> None:
+    """Imprime a linha de AC-035.4 a partir do estado de `session run`."""
+    if estado.encerrada_por_servidor_indisponivel:
+        typer.echo(
+            _linha_de_servidor_indisponivel(
+                estado.iniciada_em,
+                estado.servidor_indisponivel_desde,
+                list(estado.minutos_perdidos),
+            )
+        )
+
+
 def _imprime_resultado(resultado: ResultadoDaSessao) -> None:
     """Relatório final da sessão: o que foi pedido e o que realmente aconteceu."""
     perdidos = (
@@ -384,6 +410,14 @@ def _imprime_resultado(resultado: ResultadoDaSessao) -> None:
     typer.echo(f"Início:           {resultado.inicio or '—'}")
     typer.echo(f"Fim:              {resultado.fim or '—'}")
     typer.echo(f"Clipes em:        {resultado.dir_sessao}")
+    if resultado.encerrada_por_servidor_indisponivel:
+        typer.echo(
+            _linha_de_servidor_indisponivel(
+                resultado.iniciada_em,
+                resultado.servidor_indisponivel_desde,
+                [item.minuto for item in resultado.minutos_perdidos],
+            )
+        )
 
 
 @session_app.command("capture")
@@ -615,6 +649,7 @@ def executar_sessao_completa(
     typer.echo(f"Sessão:            {estado.id_sessao}")
     if estado.status is not None:
         typer.echo(f"Status:            {estado.status}")
+    _imprime_servidor_indisponivel_do_estado(estado)
 
     if estado.fase is Fase.CONCLUIDA:
         typer.echo(f"Planilha:          {estado.planilha}")
@@ -1119,7 +1154,8 @@ def listar_sessoes_capturadas(
 
     A sessão cancelada pelo usuário na captura (AC-008.6) mostra a marca "·
     cancelada pelo usuário" depois do status, para não ser lida como sessão
-    válida sem tráfego (AC-009.2).
+    válida sem tráfego (AC-009.2). A sessão encerrada por servidor indisponível
+    mostra "· servidor indisponível" no mesmo ponto (AC-036.4).
     """
     data_dir = _data_dir()
     caminho = caminho_do_banco(data_dir)
@@ -1148,6 +1184,8 @@ def listar_sessoes_capturadas(
         status_texto = "—" if item.status is None else item.status.value
         if item.cancelada_pelo_usuario:
             status_texto += " · cancelada pelo usuário"
+        if item.encerrada_por_servidor_indisponivel:
+            status_texto += " · servidor indisponível"
         periodo = f"{item.inicio or '—'} .. {item.fim or '—'}"
         if item.origem is OrigemDaSessao.UPLOAD:
             periodo += " (horário do processamento)"

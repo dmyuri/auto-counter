@@ -339,3 +339,44 @@ def test_AC_008_6_marcar_sessao_inexistente_e_erro_explicito(tmp_path):
     with conectar(tmp_path) as conexao:
         with pytest.raises(SessaoInexistenteError, match="fantasma"):
             marcar_sessao_cancelada(conexao, "fantasma")
+
+
+# --- AC-036.1: encerramento por servidor indisponível ---
+
+
+def test_AC_036_1_fechar_captura_grava_a_marca_de_servidor_indisponivel(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao)
+        fechar_captura(
+            conexao,
+            ID_SESSAO,
+            inicio=None,
+            fim=None,
+            duracao_real=5,
+            encerrada_pelo_usuario=False,
+            status=StatusDaSessao.INVALIDA,
+            minutos_perdidos=[1, 2, 3, 4, 5],
+            encerrada_por_servidor_indisponivel=True,
+        )
+
+        sessao = ler_sessao(conexao, ID_SESSAO)
+
+    assert sessao.encerrada_por_servidor_indisponivel is True
+    assert sessao.encerrada_pelo_usuario is False
+
+
+def test_AC_036_1_fechar_captura_sem_a_marca_grava_nao(tmp_path):
+    with conectar(tmp_path) as conexao:
+        _abrir(conexao)
+        fechar_captura(
+            conexao,
+            ID_SESSAO,
+            inicio=INICIO,
+            fim=FIM,
+            duracao_real=5,
+            encerrada_pelo_usuario=False,
+            status=StatusDaSessao.COMPLETA,
+            minutos_perdidos=[],
+        )
+
+        assert ler_sessao(conexao, ID_SESSAO).encerrada_por_servidor_indisponivel is False

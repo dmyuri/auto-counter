@@ -260,3 +260,113 @@ def test_AC_023_4_sessao_cancelada_na_captura_mostra_a_mensagem_sem_cartao(data_
     assert at.error == []
     assert downloads(at) == []
     assert "registros" not in textos(at)
+
+
+# --- servidor-indisponivel: desfecho e aviso (T-08, D-12) ---
+
+
+def estado_encerrado_por_servidor(data_dir, fase, *, desde_segundos=132, **campos):
+    """Sessão de 15 min com 1 a 3 capturados, 4 a 15 perdidos e a marca de
+    servidor indisponível, terminada em `fase` 17:05 depois de T0."""
+    fim = INICIO + DURACAO
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=15,
+        iniciada_em=INICIO,
+        agora=lambda: fim,
+    )
+    a.iniciar()
+    for minuto in (1, 2, 3):
+        a.minuto_da_captura(minuto, True)
+    for minuto in range(4, 16):
+        a.minuto_da_captura(minuto, False)
+    a.captura_encerrada_por_servidor(INICIO + timedelta(seconds=desde_segundos))
+    a.terminar(fase, id_sessao=ID_SESSAO, **campos)
+
+
+AVISO_DE_SERVIDOR = (
+    "Servidor indisponível desde 02:12 da sessão; minutos perdidos: "
+    "4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15"
+)
+
+
+def test_AC_035_1_concluida_por_servidor_mostra_desfecho_aviso_e_planilha(
+    data_dir, entregas
+):
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with conectar(data_dir) as conexao:
+        gravar_sessao(
+            conexao,
+            status=StatusDaSessao.INVALIDA,
+            duracao_pedida=15,
+            minutos_perdidos=tuple(range(4, 16)),
+        )
+    planilha = data_dir / NOME_DA_PLANILHA
+    planilha.write_bytes(CONTEUDO)
+    estado_encerrado_por_servidor(
+        data_dir, Fase.CONCLUIDA, status="INVALIDA", planilha=str(planilha)
+    )
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    texto = textos(at)
+    assert "Encerrada por servidor indisponível · 17:05" in texto
+    assert "Concluída" not in texto
+    assert AVISO_DE_SERVIDOR in [w.value for w in at.warning]
+    # O cartão da planilha continua (AC-023.2).
+    assert len(downloads(at)) == 1
+    assert NOME_DA_PLANILHA in texto
+
+
+def test_AC_035_2_sem_planilha_por_servidor_mostra_status_aviso_e_nenhum_download(
+    data_dir,
+):
+    estado_encerrado_por_servidor(
+        data_dir,
+        Fase.SEM_PLANILHA,
+        status="INVALIDA",
+        mensagem="nenhum clipe da sessão pôde ser processado; não há planilha.",
+    )
+
+    at = abre_a_interface()
+
+    assert not at.exception
+    avisos = [w.value for w in at.warning]
+    assert any("Status da sessão: INVALIDA" in w and "não há planilha" in w for w in avisos)
+    assert AVISO_DE_SERVIDOR in avisos
+    assert downloads(at) == []
+
+
+def test_AC_035_3_sessao_sem_a_marca_nao_mostra_o_aviso(data_dir):
+    data_dir.mkdir(parents=True, exist_ok=True)
+    with conectar(data_dir) as conexao:
+        gravar_sessao(
+            conexao, status=StatusDaSessao.DEGRADADA, minutos_perdidos=(2,)
+        )
+    planilha = data_dir / NOME_DA_PLANILHA
+    planilha.write_bytes(CONTEUDO)
+    a = AnotadorDoEstado(
+        data_dir,
+        pid=os.getpid(),
+        id_camera="000013",
+        nome_camera="Praça Exemplo",
+        duracao_pedida=2,
+        iniciada_em=INICIO,
+        agora=lambda: INICIO + DURACAO,
+    )
+    a.iniciar()
+    a.minuto_da_captura(1, True)
+    a.minuto_da_captura(2, False)
+    a.terminar(
+        Fase.CONCLUIDA, id_sessao=ID_SESSAO, status="DEGRADADA", planilha=str(planilha)
+    )
+
+    at = abre_a_interface()
+
+    assert "Concluída · 17:05" in textos(at)
+    assert "servidor indisponível" not in textos(at).lower()
+    assert len(downloads(at)) == 1

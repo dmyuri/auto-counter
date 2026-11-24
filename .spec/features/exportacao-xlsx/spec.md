@@ -63,6 +63,11 @@ Critérios de aceite:
   > vídeos e o período marcado como "horário do processamento" (AC-030.3).
   > Ver `.spec/features/processamento-upload/spec.md`.
 
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > A aba passa a trazer a linha "encerrada por servidor indisponível", com
+  > "SIM" ou "NÃO" (AC-036.3).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
+
   AC-010.5 — Dado uma sessão com status DEGRADADA ou INVÁLIDA, quando a planilha
   é gerada, então o status e o percentual de minutos perdidos aparecem na
   primeira linha de cada uma das três abas e o status também aparece no nome do
@@ -71,6 +76,11 @@ Critérios de aceite:
   > Na sessão de upload, o percentual passa a ser calculado sobre os minutos
   > sem dado por falha de leitura (AC-030.4 e SUP-095).
   > Ver `.spec/features/processamento-upload/spec.md`.
+
+  > **Alterado por:** feature `servidor-indisponivel`, em 2026-11-15.
+  > Na sessão encerrada por servidor indisponível, o percentual passa a incluir
+  > os minutos não tentados depois do encerramento (AC-033.5).
+  > Ver `.spec/features/servidor-indisponivel/spec.md`.
 
   AC-010.6 — Dado a mesma sessão exportada duas vezes, quando as duas planilhas
   são comparadas, então o conteúdo das três abas é idêntico.

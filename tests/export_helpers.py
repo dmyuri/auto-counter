@@ -64,6 +64,7 @@ def gravar_sessao(
     duracao_pedida: int = 2,
     duracao_real: int | None = None,
     encerrada_pelo_usuario: bool = False,
+    encerrada_por_servidor_indisponivel: bool = False,
     status: StatusDaSessao | None = StatusDaSessao.COMPLETA,
     minutos_perdidos: tuple[int, ...] = (),
     eventos: tuple[Evento, ...] = (),
@@ -106,6 +107,7 @@ def gravar_sessao(
         encerrada_pelo_usuario=encerrada_pelo_usuario,
         status=status,
         minutos_perdidos=minutos_perdidos,
+        encerrada_por_servidor_indisponivel=encerrada_por_servidor_indisponivel,
     )
     if not processada:
         return

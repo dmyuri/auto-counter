@@ -60,6 +60,10 @@ def escrever_sessao(planilha: Worksheet, dados: DadosDaExportacao) -> None:
         ("duração pedida (min)", sessao.duracao_pedida),
         ("duração real (min)", sessao.duracao_real),
         ("encerrada pelo usuário", "SIM" if sessao.encerrada_pelo_usuario else "NÃO"),
+        (
+            "encerrada por servidor indisponível",
+            "SIM" if sessao.encerrada_por_servidor_indisponivel else "NÃO",
+        ),
         ("status", sessao.status.value),
         (
             "minutos sem dado (falha de leitura)" if upload else "minutos perdidos",
