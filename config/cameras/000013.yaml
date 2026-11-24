@@ -1,0 +1,27 @@
+# Camera 000013 - camera do MVP, a unica calibrada nesta entrega.
+#
+# Calibrada em T-10 contra o PNG de preview (AC-002.1): a linha cai sobre a
+# faixa de retencao, de bordo a bordo do asfalto, e cobre as duas maos.
+# A normal de p1 -> p2 aponta para cima no quadro (SUP-003), entao sentido_a
+# rotula quem se afasta da camera (mao a esquerda da faixa amarela dupla) e
+# sentido_b quem se aproxima (mao a direita). Conferido no PNG: quem se afasta
+# vai para Icarai e quem se aproxima vai para o Centro.
+# Trocar p1 por p2 inverte os dois sentidos: a ordem dos pontos importa.
+#
+# O id fica entre aspas para preservar os zeros a esquerda (SUP-001): sem
+# aspas o YAML leria 000013 como numero.
+# Nenhuma URL aqui: ela e derivada do id (AC-001.4) sobre a base URL que vem
+# de AUTO_COUNTER_BASE_URL.
+# Coordenadas em pixels absolutos do frame original 1280x720 (SUP-002).
+id: "000013"
+nome: "Praça Getúlio Vargas"
+sentido_a: "Icaraí"
+sentido_b: "Centro"
+linha:
+  p1: {x: 1053, y: 348}
+  p2: {x: 351, y: 445}
+# Imagem fixa exibida no cartao da interface (SUP-066 de layout-interface),
+# relativa a este diretorio. Opcional: sem ela, o cartao mostra "sem previa".
+preview: "000013-v3.png"
+# Resolucao do frame em que a linha foi calibrada (SUP-086).
+resolucao: {largura: 1280, altura: 720}

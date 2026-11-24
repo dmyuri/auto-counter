@@ -1,0 +1,56 @@
+# Ambiente e artefatos do Python
+.venv/
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+
+# uv.lock É versionado de propósito: a reprodutibilidade na defesa depende dele.
+
+# Testes e gate de rastreabilidade
+report.xml
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Credenciais e URLs das câmeras da NitTrans — nunca no repositório
+.env
+.env.*
+!.env.example
+
+# Banco de resultados (SQLite)
+*.db
+*.sqlite
+*.sqlite3
+*-wal
+*-shm
+
+# Pesos e modelos baixados ou exportados
+*.pt
+*.onnx
+
+# Streamlit
+.streamlit/secrets.toml
+
+# Sistema operacional
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+.DS_Store
+
+# Logs, reports e arquivos temporários
+.spec/features/*/_tasks.md
+
+# ATENÇÃO ao adicionar regras de vídeo aqui: nunca por padrão amplo como
+# *.mp4, que varreria junto as fixtures de validação. Sempre por caminho.
+
+# Ground truth: só os vídeos saem do git. Os CSVs de contagem manual e o
+# manifest.yaml ao lado deles são versionados de propósito, conforme SUP-044
+# de .spec/features/validacao-acuracia/spec.md.
+tests/ground_truth/clipes/
+
+# Sessões capturadas das câmeras (SUP-012 de captura-clipes): clipes, planilhas
+# e banco do diretório de dados padrão, usado quando AUTO_COUNTER_DATA_DIR não
+# aponta para fora do repositório.
+data/

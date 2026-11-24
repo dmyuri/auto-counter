@@ -1,0 +1,115 @@
+"""Nomes de download, tamanho em MB, duração e `.zip` dos clipes —
+download-clipes.
+
+Comportamento em `.spec/features/download-clipes/spec.md`: SUP-077 (nome do
+arquivo), D-2 (duração medida com OpenCV), D-3 (sufixo por minuto de
+relógio), D-5 (formato do tamanho em MB) e a parte de `pipeline` da D-6 (o
+`.zip` em memória, sem recomprimir).
+
+Funções puras: nada aqui importa `streamlit`, grava em disco ou abre o
+`manifest.json` — `clipes_mantidos` recebe a tupla de `MinutoCapturado` já
+pronta (de `ResultadoDaSessao`) e só lê os bytes e os metadados dos próprios
+clipes.
+"""
+
+from __future__ import annotations
+
+import zipfile
+from collections.abc import Sequence
+from datetime import datetime
+from io import BytesIO
+from pathlib import Path
+
+import cv2
+
+from auto_counter.capture.manifest import MinutoCapturado
+from auto_counter.export.format import FUSO
+from auto_counter.pipeline.state import ClipeMantido
+
+
+def nomes_de_download(id_camera: str, instantes: Sequence[datetime]) -> tuple[str, ...]:
+    """Um nome por instante, na ordem recebida, pela regra de SUP-077 e D-3.
+
+    O primeiro instante de cada minuto de relógio (em horário de Brasília)
+    fica sem sufixo; os seguintes no mesmo minuto recebem `_2`, `_3`...
+    """
+    contagem: dict[str, int] = {}
+    nomes = []
+    for instante in instantes:
+        if instante.tzinfo is None:
+            raise ValueError(
+                f"instante sem fuso horário ({instante!r}); o nome do clipe "
+                f"exige fuso explícito para converter para o horário de "
+                f"Brasília"
+            )
+        local = instante.astimezone(FUSO)
+        base = f"{id_camera}_{local:%Y%m%d}_{local:%H%M}"
+        contagem[base] = contagem.get(base, 0) + 1
+        ordem = contagem[base]
+        sufixo = "" if ordem == 1 else f"_{ordem}"
+        nomes.append(f"{base}{sufixo}.mp4")
+    return tuple(nomes)
+
+
+def formatar_megabytes(tamanho_em_bytes: int) -> str:
+    """MB decimal (10⁶ bytes), uma casa, vírgula, meio para cima (D-5)."""
+    decimos = (2 * tamanho_em_bytes + 100_000) // 200_000
+    return f"{decimos // 10},{decimos % 10} MB"
+
+
+def montar_zip(arquivos: Sequence[tuple[Path, str]]) -> bytes:
+    """O `.zip` em memória, sem recomprimir (o `.mp4` já é comprimido), D-6.
+
+    Um membro por par `(caminho, nome_no_zip)`, na ordem recebida, com o
+    conteúdo lido do `caminho`.
+    """
+    buffer = BytesIO()
+    with zipfile.ZipFile(buffer, mode="w", compression=zipfile.ZIP_STORED) as zip_arquivo:
+        for caminho, nome_no_zip in arquivos:
+            zip_arquivo.writestr(nome_no_zip, Path(caminho).read_bytes())
+    return buffer.getvalue()
+
+
+def duracao_em_segundos(caminho: Path) -> int | None:
+    """A duração do clipe, truncada para segundos inteiros (D-2).
+
+    Clipe que não abre, com FPS zero, ou qualquer falha do OpenCV dão `None`.
+    Nunca levanta: a medição é conveniência de exibição, não condição da
+    sessão.
+    """
+    captura = cv2.VideoCapture(str(caminho))
+    try:
+        if not captura.isOpened():
+            return None
+        fps = captura.get(cv2.CAP_PROP_FPS)
+        quadros = captura.get(cv2.CAP_PROP_FRAME_COUNT)
+        if not fps:
+            return None
+        return int(quadros / fps)
+    except Exception:
+        return None
+    finally:
+        captura.release()
+
+
+def clipes_mantidos(
+    dir_sessao: Path,
+    minutos_capturados: Sequence[MinutoCapturado],
+    *,
+    medir=duracao_em_segundos,
+) -> tuple[ClipeMantido, ...]:
+    """Um `ClipeMantido` por minuto capturado, em ordem de minuto (D-1, D-2).
+
+    Minuto perdido não chega aqui, porque não está em `minutos_capturados`
+    (AC-025.2). Esta função não lê o manifest do disco: recebe a tupla pronta.
+    """
+    dir_sessao = Path(dir_sessao)
+    return tuple(
+        ClipeMantido(
+            minuto=item.minuto,
+            caminho=(dir_sessao / item.arquivo).resolve(),
+            last_modified=item.last_modified,
+            duracao_segundos=medir((dir_sessao / item.arquivo).resolve()),
+        )
+        for item in sorted(minutos_capturados, key=lambda item: item.minuto)
+    )

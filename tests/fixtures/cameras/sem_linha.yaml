@@ -1,0 +1,6 @@
+# Camera cadastrada sem linha de contagem (AC-002.4). Nao existe linha
+# padrao nem herdada: ela precisa ser rejeitada.
+id: "000077"
+nome: "Camera cadastrada sem calibracao"
+sentido_a: "sentido A"
+sentido_b: "sentido B"
